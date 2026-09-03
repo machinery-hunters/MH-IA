@@ -1,0 +1,21 @@
+[project]
+name = "mh-ia"
+version = "0.1.0"
+description = "Sistema híbrido de IA de Machinery Hunters (RAG local + razonamiento avanzado)"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

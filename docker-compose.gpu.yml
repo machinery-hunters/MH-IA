@@ -1,0 +1,56 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────
+# OVERRIDE: Laptop de desarrollo/pruebas
+# Acer Predator Helios Neo 16S AI · Core Ultra 9 · RTX 5070 Ti (12GB VRAM) · 32GB RAM
+#
+# Aquí SÍ containerizamos Ollama porque en Windows/WSL2 o Linux nativo,
+# Docker puede pasar la GPU NVIDIA al contenedor (a diferencia de Mac).
+#
+# Requisitos previos en el host:
+#   - Driver NVIDIA actualizado (>= 550.x recomendado para RTX 50-series)
+#   - NVIDIA Container Toolkit instalado
+#       Windows: usar Docker Desktop con backend WSL2 + "GPU support" activo
+#                (basta con tener el driver NVIDIA para Windows actualizado,
+#                 WSL2 expone la GPU automáticamente a Docker Desktop)
+#       Linux:   instalar nvidia-container-toolkit y `sudo nvidia-ctk runtime configure --runtime=docker`
+#   - Verificar con: docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+#
+# Uso:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# ─────────────────────────────────────────────────────────────────────────
+
+services:
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: mhia-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - mhia_net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    # 12GB VRAM: cómodo para llama3.1:8b / qwen2.5:14b-instruct-q4 / nomic-embed-text
+    # en simultáneo. Evitar modelos >20B sin cuantizar agresiva (q4_K_M o menor).
+
+  mhia-app:
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+    depends_on:
+      - ollama
+
+networks:
+  mhia_net:
+    driver: bridge
+
+volumes:
+  ollama_data:

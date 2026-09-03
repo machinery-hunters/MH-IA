@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check app tests
+
+      - name: Formato (black --check)
+        run: black --check app tests
+
+      - name: Tests (pytest)
+        run: pytest -v
+        env:
+          # Variables dummy: los tests no deben requerir servicios reales
+          # ni credenciales reales (ver app/config.py Settings.require).
+          ANTHROPIC_API_KEY: ""
