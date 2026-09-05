@@ -1,0 +1,28 @@
+[
+  {"query": "¿Cuántas grúas Titanes quedan disponibles en subasta este mes?", "expected_domain": "inventario"},
+  {"query": "¿Cuál es el estatus de la excavadora CAT 320 que está en consignación?", "expected_domain": "inventario"},
+  {"query": "Resume de qué trata el documento de Efectividad en Equipos de Portafolio", "expected_domain": "inventario"},
+  {"query": "¿Qué máquinas tenemos en el lote 42 de la subasta de agosto?", "expected_domain": "inventario"},
+  {"query": "¿Cuál es el precio de compra máximo rentable para una bomba de concreto Schwing?", "expected_domain": "inventario"},
+
+  {"query": "¿Cuánto se vendió el trimotor Kenworth del cliente Grupo Industrial X?", "expected_domain": "ventas"},
+  {"query": "¿Cuál fue la comisión de Juan Pérez este mes?", "expected_domain": "ventas"},
+  {"query": "Dame el historial de cotizaciones del cliente Constructora del Norte", "expected_domain": "ventas"},
+  {"query": "¿Cuántas máquinas se vendieron en la subasta cerrada del 15 de agosto?", "expected_domain": "ventas"},
+
+  {"query": "¿Cuánto le debemos al proveedor Grúas del Norte por la última consignación?", "expected_domain": "proveedores"},
+  {"query": "¿Cuál es el contrato de consignación con el proveedor Maquinaria Pesada SA?", "expected_domain": "proveedores"},
+  {"query": "¿Está al corriente el pago al consignante que trajo las excavadoras CAT?", "expected_domain": "proveedores"},
+  {"query": "Resume el contrato de consignación firmado con Transportes del Bajío", "expected_domain": "proveedores"},
+
+  {"query": "¿Cómo funciona el sistema de IA de MH?", "expected_domain": "general"},
+  {"query": "¿Cuál es la política de garantía de Machinery Hunters?", "expected_domain": "general"},
+  {"query": "¿Qué documentos tenemos sobre normas de seguridad en el taller?", "expected_domain": "general"},
+  {"query": "Explícame qué es RAG y por qué lo usamos", "expected_domain": "general"},
+  {"query": "¿Cuál es el horario de atención de la oficina?", "expected_domain": "general"},
+
+  {"query": "Resume este documento", "expected_domain": null, "note": "Ambiguo a propósito: sin contenido de negocio explícito en la consulta. No se exige un dominio específico, solo que NO truene el parseo JSON."},
+  {"query": "¿Qué opinas del mercado de maquinaria pesada en México en general?", "expected_domain": "general"},
+  {"query": "Necesito un resumen de la carpeta de proveedores para la junta de mañana", "expected_domain": "proveedores"},
+  {"query": "¿Qué tan efectivo ha sido nuestro portafolio de bombas de concreto comparado con el mercado?", "expected_domain": "inventario"}
+]

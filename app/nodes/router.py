@@ -30,18 +30,48 @@ def _get_router_llm() -> ChatOllama:
     )
 
 
-_ROUTER_PROMPT = """Eres un clasificador interno de Machinery Hunters.
+_ROUTER_PROMPT = """Eres un clasificador interno de Machinery Hunters (MH),
+empresa de compra-venta, subasta y consignación de maquinaria pesada.
+
 Clasifica la siguiente consulta de usuario en JSON estricto con este esquema:
 {{"data_domain": "ventas|inventario|proveedores|general", "reason": "..."}}
 
-- "ventas": cotizaciones, órdenes, comisiones, clientes, subastas cerradas.
-- "inventario": maquinaria en subasta, consignación, stock, ubicación de equipos.
-- "proveedores": consignantes, contratos, pagos a proveedores.
-- "general": preguntas conceptuales, políticas públicas, uso del sistema, etc.
+- "ventas": cotizaciones, órdenes, comisiones, clientes, subastas cerradas,
+  montos vendidos.
+- "inventario": maquinaria en subasta o consignación, stock, ubicación de
+  equipos, precios de compra/venta de referencia, portafolio de equipos,
+  categorías/marcas/modelos de maquinaria.
+- "proveedores": consignantes, contratos de consignación, pagos a
+  proveedores/consignantes.
+- "general": preguntas conceptuales, políticas públicas de la empresa, uso
+  del sistema de IA, temas de mercado sin datos internos de MH.
 
+REGLA IMPORTANTE: clasifica por el CONTENIDO de negocio que la consulta
+implica, no solo por el verbo de la pregunta. Preguntas que piden "resumir",
+"explicar" o "qué dice" un documento/tema deben clasificarse según de qué
+trata ese documento/tema, no como "general" por defecto. Si el nombre de un
+documento o la consulta menciona equipos, maquinaria, portafolio de activos,
+precios de compra/venta, tonelaje, marcas de maquinaria, subastas,
+consignación, cotizaciones, comisiones, clientes o proveedores, NO es
+"general" — clasifica el dominio de negocio correspondiente.
+
+Ejemplos:
+Consulta: "¿Cuántas grúas quedan disponibles en subasta?"
+{{"data_domain": "inventario", "reason": "pregunta por stock de maquinaria en subasta"}}
+
+Consulta: "Resume de qué trata el documento de Efectividad en Equipos de Portafolio"
+{{"data_domain": "inventario", "reason": "el nombre del documento indica portafolio de equipos, es contenido de inventario aunque el verbo sea 'resumir'"}}
+
+Consulta: "¿Cuánto le debemos al proveedor Grúas del Norte?"
+{{"data_domain": "proveedores", "reason": "pago a un consignante/proveedor específico"}}
+
+Consulta: "¿Cómo funciona el sistema de IA de MH?"
+{{"data_domain": "general", "reason": "pregunta sobre el propio sistema, sin datos de negocio de MH"}}
+
+Ahora clasifica esta consulta:
 Consulta: {query}
 
-Responde SOLO el JSON.
+Responde SOLO el JSON, sin texto adicional.
 """
 
 

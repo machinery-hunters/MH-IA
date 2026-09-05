@@ -26,11 +26,12 @@ import logging
 import os
 import uuid
 
-from langchain_ollama import OllamaEmbeddings
+
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 
 from app.config import settings
+from app.embeddings import TaskPrefixedOllamaEmbeddings
 from app.ingestion.chunker import chunk_file
 from app.ingestion.drive_client import DriveClient, DriveFile
 from app.ingestion.loaders import extract_text
@@ -61,7 +62,7 @@ def _point_id(chunk_id: str) -> str:
 class Indexer:
     def __init__(self) -> None:
         self.drive = DriveClient()
-        self.embeddings = OllamaEmbeddings(
+        self.embeddings = TaskPrefixedOllamaEmbeddings(
             model=settings.ollama_embed_model, base_url=settings.ollama_base_url
         )
         self.qdrant = QdrantClient(url=settings.qdrant_url)
