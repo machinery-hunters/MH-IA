@@ -1,19 +1,22 @@
-# Uso: make <target>
-# Requiere: Docker, Docker Compose v2, Python 3.12 (para lint/test locales)
+# Uso: make <target>   (macOS/Linux; en Windows usa scripts/dev.ps1)
+# Requiere: Docker, Docker Compose v2, Python 3.12 (lint/test locales)
 
-.PHONY: help up-gpu up-mac down logs ingest lint fmt test venv
+.PHONY: help up-gpu up-mac down logs ingest lint fmt test venv web-install web-build
+
+PIPELINE_DIR := services/pipeline_ai
 
 help:
 	@echo "Targets disponibles:"
 	@echo "  make up-gpu    - Levanta el stack en la laptop (Ollama con GPU NVIDIA)"
-	@echo "  make up-mac    - Levanta el stack en el Mac Mini (Ollama nativo)"
+	@echo "  make up-mac    - Levanta el stack en el Mac mini (Ollama nativo)"
 	@echo "  make down      - Detiene el stack"
-	@echo "  make logs      - Sigue los logs de mhia-app"
-	@echo "  make ingest    - Corre la sincronización de Google Drive -> Qdrant"
-	@echo "  make venv      - Crea un entorno virtual local para desarrollo (sin Docker)"
-	@echo "  make lint      - Corre ruff + black --check"
-	@echo "  make fmt       - Aplica black + ruff --fix"
-	@echo "  make test      - Corre la suite de pytest"
+	@echo "  make logs      - Sigue los logs de mhia-api"
+	@echo "  make ingest    - Sincroniza Google Drive -> Qdrant"
+	@echo "  make venv      - Crea el entorno virtual de $(PIPELINE_DIR)"
+	@echo "  make lint      - ruff + black --check"
+	@echo "  make fmt       - black + ruff --fix"
+	@echo "  make test      - pytest"
+	@echo "  make web-install / web-build - dependencias y build de la GUI"
 
 up-gpu:
 	docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
@@ -25,24 +28,27 @@ down:
 	docker compose down
 
 logs:
-	docker compose logs -f mhia-app
+	docker compose logs -f mhia-api
 
 ingest:
-	docker exec -it mhia-app python -m app.ingestion.run_ingest
+	docker exec -it mhia-api python -m pipeline_ai.ingestion.run_ingest
 
 venv:
-	python3 -m venv .venv
-	.venv/bin/pip install --upgrade pip
-	.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
-	@echo "Activa con: source .venv/bin/activate"
+	python3 -m venv $(PIPELINE_DIR)/.venv
+	$(PIPELINE_DIR)/.venv/bin/pip install --upgrade pip
+	$(PIPELINE_DIR)/.venv/bin/pip install -r $(PIPELINE_DIR)/requirements.txt -r $(PIPELINE_DIR)/requirements-dev.txt
 
 lint:
-	ruff check app tests
-	black --check app tests
+	cd $(PIPELINE_DIR) && ruff check pipeline_ai tests eval && black --check pipeline_ai tests eval
 
 fmt:
-	ruff check app tests --fix
-	black app tests
+	cd $(PIPELINE_DIR) && ruff check pipeline_ai tests eval --fix && black pipeline_ai tests eval
 
 test:
-	pytest -v
+	cd $(PIPELINE_DIR) && pytest -v
+
+web-install:
+	cd web && npm ci
+
+web-build:
+	cd web && npm run build
