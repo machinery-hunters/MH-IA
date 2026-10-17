@@ -27,7 +27,7 @@ silenciosamente por ahora.
 
 ```bash
 # la app ya debe estar levantada (docker compose up -d con el override correspondiente)
-docker exec -it mhia-app python -m app.ingestion.run_ingest
+docker exec -it mhia-api python -m pipeline_ai.ingestion.run_ingest
 ```
 
 Es **incremental**: guarda un manifest en `./data/sync_manifest.json` con
@@ -40,13 +40,13 @@ eliminan de Qdrant automáticamente.
 
 ```bash
 # crontab -e
-0 */6 * * * cd /ruta/a/mh-ia && docker exec mhia-app python -m app.ingestion.run_ingest >> ./data/ingest.log 2>&1
+0 */6 * * * cd /ruta/a/mh-ia && docker exec mhia-api python -m pipeline_ai.ingestion.run_ingest >> ./data/ingest.log 2>&1
 ```
 
 ## 5. Relación con las reglas críticas del sistema
 
 - Todo el pipeline (descarga, extracción, chunking, embeddings) corre
-  local: Drive -> contenedor `mhia-app` -> Ollama (embeddings) -> Qdrant.
+  local: Drive -> contenedor `mhia-api` -> Ollama (embeddings) -> Qdrant.
   Nada de esto toca la API de Claude.
 - El `metadata.source` guardado en cada chunk (`"Google Drive: <nombre>"`)
   es exactamente lo que `retriever_node.py` usa para construir `citations`,

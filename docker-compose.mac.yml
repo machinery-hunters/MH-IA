@@ -1,26 +1,24 @@
-version: "3.9"
-
 # ─────────────────────────────────────────────────────────────────────────
-# OVERRIDE: Producción — Mac Mini M4 Pro
+# OVERRIDE: Producción — Mac mini M5 Pro
 #
-# Ollama NO se containeriza aquí: corre nativo en macOS (brew install ollama
-# o la app Ollama.app) para usar el GPU/Metal del M4 Pro al 100%. Docker
-# Desktop en macOS no tiene passthrough de GPU Apple Silicon a contenedores
-# Linux, así que containerizarlo forzaría CPU-only y perderías la mayoría
-# del rendimiento de inferencia local.
+# Ollama NO se containeriza: corre nativo en macOS para usar Metal al 100%
+# (Docker Desktop en Mac no pasa la GPU de Apple Silicon a contenedores
+# Linux). Todas las imágenes de este stack son compatibles con ARM64.
 #
 # Pre-requisito en el host Mac:
 #   brew install ollama
-#   ollama serve  (o dejar correr Ollama.app en background / como launchd)
+#   brew services start ollama      # escucha solo en 127.0.0.1 por defecto
 #   ollama pull llama3.1:8b
 #   ollama pull nomic-embed-text
 #
+# NO cambies OLLAMA_HOST a 0.0.0.0: Ollama no tiene autenticación.
+#
 # Uso:
-#   docker compose -f docker-compose.yml -f docker-compose.mac.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.mac.yml up -d --build
 # ─────────────────────────────────────────────────────────────────────────
 
 services:
-  mhia-app:
+  mhia-api:
     environment:
       # host.docker.internal resuelve al host Mac en Docker Desktop
       - OLLAMA_BASE_URL=http://host.docker.internal:11434

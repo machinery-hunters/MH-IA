@@ -43,34 +43,52 @@ Conectores (Drive, ERPNext, ...)
 | Quiero... | Ir a... |
 |---|---|
 | Instalar todo lo necesario en mi máquina | [`INSTALL.md`](./INSTALL.md) |
-| Levantar el stack con Docker Compose | [`DEPLOYMENT.md`](./DEPLOYMENT.md) |
+| Levantar el stack con Docker Compose, acceso remoto y migración | [`DEPLOYMENT.md`](./DEPLOYMENT.md) |
+| Entender la arquitectura y sus decisiones | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) |
+| Ver el plan de construcción | [`docs/ROADMAP.md`](./docs/ROADMAP.md) |
+| Ver el modelo de seguridad y sus huecos conocidos | [`SECURITY.md`](./SECURITY.md) |
 | Sincronizar documentos de Google Drive | [`INGESTION.md`](./INGESTION.md) |
 | Entender el diseño completo / requisitos | `SRS_MH_IA.docx` |
 | Contribuir código (branches, commits, PRs) | [`CONTRIBUTING.md`](./CONTRIBUTING.md) |
 
 ## Comandos rápidos
 
-```bash
-make up-gpu     # levantar en la laptop de desarrollo (Ollama con GPU NVIDIA)
-make up-mac     # levantar en el Mac Mini de producción (Ollama nativo)
-make ingest     # sincronizar Google Drive -> Qdrant
-make test       # correr la suite de pytest
-make lint       # ruff + black --check
+Windows (PowerShell):
+
+```powershell
+.\scripts\dev.ps1 doctor        # valida compose, puertos y secretos sin levantar nada
+.\scripts\dev.ps1 up            # levantar en la laptop (Ollama con GPU NVIDIA)
+.\scripts\dev.ps1 pull-models   # descargar llama3.1:8b y nomic-embed-text
+.\scripts\dev.ps1 ingest        # sincronizar Google Drive -> Qdrant
+.\scripts\dev.ps1 test          # pytest
+.\scripts\dev.ps1 lint          # ruff + black --check
 ```
+
+macOS/Linux: `make up-gpu`, `make up-mac`, `make ingest`, `make test`, `make lint`.
 
 ## Estructura del repositorio
 
 ```
-app/
-├── config.py             # Settings centralizados (variables de entorno)
-├── state.py               # Estado del grafo (MHIAState)
-├── graph.py                 # Ensamblado del grafo LangGraph
-├── main.py                    # CLI de prueba conversacional
-├── nodes/                      # Nodos del grafo (router, retriever, anonymizer, claude, guardrail)
-└── ingestion/                   # Conector Google Drive -> Qdrant (Fase 1)
-tests/                    # Suite de pytest (estructura del grafo, guardrails, config)
-docker-compose*.yml       # Base + overrides por entorno (gpu / mac)
-.github/workflows/ci.yml  # Lint + tests en cada push/PR
+services/pipeline_ai/
+├── pipeline_ai/
+│   ├── api/             # FastAPI: /health, /api/v1/me, /connectors, /query
+│   ├── agents/          # sub-agente (aislamiento) y supervisor (consolidación)
+│   ├── connectors/      # Drive, ERP, CRM, Firestore (stubs) + registro
+│   ├── privacy/         # sensibilidad, scrubber y outbound gateway (stubs)
+│   ├── security/        # roles y permisos (RBAC)
+│   ├── nodes/           # nodos del grafo actual (router, retriever, anonymizer, claude, guardrail)
+│   ├── ingestion/       # Google Drive -> Qdrant (funciona hoy)
+│   ├── config.py        # Settings centralizados
+│   ├── state.py         # Estado del grafo
+│   └── graph.py         # Flujo LangGraph actual
+├── tests/               # pytest, sin servicios reales
+└── eval/                # calibración del router (requiere Ollama)
+web/                      # GUI Next.js + TypeScript + Tailwind (PWA)
+docs/                     # ARCHITECTURE, ROADMAP, GUI_DIRECCION_VISUAL
+scripts/dev.ps1           # tareas de desarrollo en Windows
+docker-compose*.yml       # base + overrides (gpu / mac / dev)
+SECURITY.md               # cubierto / aceptado como riesgo / no resuelto
+.github/workflows/ci.yml  # lint + tests + build GUI + secretos + Docker amd64/arm64
 ```
 
 ## Estado del proyecto

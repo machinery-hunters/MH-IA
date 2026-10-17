@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+/*
+ * Tokens de diseño PROVISIONALES (grises neutros) hasta elegir la dirección
+ * visual de docs/GUI_DIRECCION_VISUAL.md. Cambiar de dirección = reemplazar
+ * estos valores y las fuentes; los componentes solo usan los nombres
+ * semánticos de abajo, nunca colores sueltos.
+ */
+:root {
+  --mh-surface: #f3f4f2;
+  --mh-panel: #ffffff;
+  --mh-ink: #1d252b;
+  --mh-muted: #5d6870;
+  --mh-line: #cfd5d8;
+  --mh-evidence: #b88700;
+  --mh-ok: #2e6b4f;
+  --mh-warn: #8a5a00;
+  --mh-bad: #a8261c;
+  --mh-focus: #0b57d0;
+}
+
+@theme inline {
+  --color-surface: var(--mh-surface);
+  --color-panel: var(--mh-panel);
+  --color-ink: var(--mh-ink);
+  --color-muted: var(--mh-muted);
+  --color-line: var(--mh-line);
+  --color-evidence: var(--mh-evidence);
+  --color-ok: var(--mh-ok);
+  --color-warn: var(--mh-warn);
+  --color-bad: var(--mh-bad);
+  --font-sans: system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: var(--mh-surface);
+  color: var(--mh-ink);
+  font-family: var(--font-sans);
+}
+
+:focus-visible {
+  outline: 2px solid var(--mh-focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
