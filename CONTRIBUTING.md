@@ -2,19 +2,54 @@
 
 ## Flujo de ramas
 
-- `main` — siempre desplegable. Solo se llega por PR.
-- `develop` — integración de trabajo en curso.
-- Ramas de trabajo: `feature/<descripción-corta>`, `fix/<descripción-corta>`,
-  `docs/<descripción-corta>`.
+- `main` — siempre desplegable. Solo se llega por PR desde `develop`. Nunca
+  se hace `git push origin main` directo.
+- `develop` — integración de trabajo en curso. Todo PR de trabajo apunta aquí.
+- Ramas de trabajo (cortas, una por frente, se borran al fusionar):
 
-```bash
+| Prefijo | Para qué |
+|---|---|
+| `feature/<descripción>` | Funcionalidad nueva (un conector, una pantalla) |
+| `fix/<descripción>` | Corrección de un error |
+| `security/<descripción>` | Cierra un hueco de `SECURITY.md` (sección 3) |
+| `chore/<descripción>` | Infraestructura, CI, dependencias, estructura |
+| `docs/<descripción>` | Solo documentación |
+
+```powershell
 git checkout develop
 git pull
-git checkout -b feature/conector-erpnext
+git checkout -b feature/conector-firestore
 # ... trabajo ...
-git push -u origin feature/conector-erpnext
-# abrir PR hacia develop
+git push -u origin feature/conector-firestore
+# abrir PR hacia develop (verifica que la base diga "develop")
 ```
+
+Al fusionar, borrar la rama:
+
+```powershell
+git checkout develop
+git pull
+git branch -d feature/conector-firestore
+git push origin --delete feature/conector-firestore
+```
+
+### Versiones y despliegue
+
+- Cuando `develop` está estable, se abre un PR de `develop` hacia `main`.
+- Cada fusión a `main` que se vaya a desplegar se etiqueta con
+  `vMAYOR.MENOR.PARCHE` (por ejemplo `v0.2.0`):
+
+```powershell
+git checkout main
+git pull
+git tag -a v0.2.0 -m "v0.2.0: resumen breve"
+git push origin v0.2.0
+```
+
+- La Mac mini despliega una etiqueta concreta (`git checkout v0.2.0`), nunca
+  una rama en movimiento; volver atrás es desplegar la etiqueta anterior.
+- Un cambio que toca seguridad, red, credenciales o permisos actualiza
+  `SECURITY.md` en el mismo PR.
 
 ## Commits
 
