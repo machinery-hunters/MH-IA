@@ -1,0 +1,24 @@
+# Datos sensibles conocidos de los documentos SINTETICOS de lab/docs.
+# Si alguno aparece en el texto que se enviaria a Claude, la prueba marca FUGA.
+# Una linea por canario; las que empiezan con # se ignoran. La comparacion no distingue mayusculas.
+CFN010101AB1
+GIE050505XY2
+laura.mendoza@constructora-ficticia.example
+ricardo.valdez@grupo-ejemplo.example
+hector.salinas@transportes-ficticios.example
+6531234567
+6629876543
+012345678901234567
+Constructora Ficticia
+Laura Mendoza
+Grupo Industrial Ejemplo
+Ricardo Valdez
+Transportes Ficticios
+Hector Salinas
+2,450,000
+85,000
+780,000
+Cotizacion_Excavadora
+Consignacion_Grupo_Ejemplo
+Proveedor_Transportes
+Resumen_Financiero

@@ -1,0 +1,16 @@
+FICHA DE PROVEEDOR: TRANSPORTES FICTICIOS DEL PACIFICO SA DE CV (DOCUMENTO SINTETICO DE PRUEBA)
+
+Servicio: traslado de maquinaria pesada en plataforma entre Mexicali, Zapopan y Hermosillo.
+Contacto: Hector Salinas Vega, Coordinador de Rutas
+Correo: hector.salinas@transportes-ficticios.example
+Telefono: 6629876543
+
+Tarifas vigentes (en pesos mexicanos, MXN):
+- Mexicali a Zapopan: $48,500 MXN por viaje.
+- Mexicali a Hermosillo: $22,000 MXN por viaje.
+- Hermosillo a Zapopan: $39,000 MXN por viaje.
+
+Datos de pago: transferencia a la CLABE 012345678901234567 a nombre del proveedor.
+Condiciones de pago: 50% al cargar y 50% al entregar.
+Tiempo de entrega: entre 3 y 5 dias habiles segun la ruta.
+Calificacion interna: cumple en tiempo, un retraso en los ultimos 12 viajes.

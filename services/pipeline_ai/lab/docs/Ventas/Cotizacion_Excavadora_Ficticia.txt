@@ -1,0 +1,15 @@
+COTIZACION COT-2026-0412 (DOCUMENTO SINTETICO DE PRUEBA)
+
+Cliente: Constructora Ficticia del Norte SA de CV
+RFC: CFN010101AB1
+Contacto: Laura Mendoza Prieto, Gerente de Compras
+Correo: laura.mendoza@constructora-ficticia.example
+Telefono: 6531234567
+
+Equipo cotizado: Excavadora CAT 320, año 2018, 6,200 horas de uso, ubicada en el patio de Mexicali.
+Precio de lista: USD 85,000 puestos en patio.
+Anticipo requerido: 30% al firmar la cotizacion, el resto contra entrega.
+Vigencia de la cotizacion: 15 dias naturales.
+Condiciones: el equipo se vende en el estado en que se encuentra; el cliente puede inspeccionarlo antes de pagar.
+Flete: por cuenta del cliente. Se puede coordinar con el proveedor de transporte de Machinery Hunters.
+Observaciones: el cliente pidio una segunda opcion de excavadora similar si esta deja de estar disponible.
