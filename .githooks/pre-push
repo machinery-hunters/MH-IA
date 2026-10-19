@@ -1,0 +1,39 @@
+#!/bin/sh
+#
+# pre-push: bloquea el push directo a main y develop.
+#
+# Por qué existe: con el plan actual de la organización, GitHub NO aplica las
+# reglas de protección de ramas en repositorios privados. Este hook es una
+# protección local contra accidentes (por ejemplo `git push origin main`).
+# NO es un control de seguridad: se puede saltar con `git push --no-verify`
+# y solo existe en los clones donde esté activado.
+#
+# Activar (una vez por clon):   git config core.hooksPath .githooks
+#   o en Windows:               .\scripts\dev.ps1 hooks
+#
+# Los cambios llegan a main/develop por Pull Request (ver CONTRIBUTING.md).
+# Excepción consciente y puntual: MHIA_ALLOW_PROTECTED_PUSH=1 git push ...
+
+if [ "${MHIA_ALLOW_PROTECTED_PUSH:-}" = "1" ]; then
+    echo "pre-push: MHIA_ALLOW_PROTECTED_PUSH=1, se permite el push a ramas protegidas." >&2
+    exit 0
+fi
+
+# Entrada estándar: <ref local> <sha local> <ref remota> <sha remota>
+while read -r local_ref local_sha remote_ref remote_sha; do
+    case "$remote_ref" in
+        refs/heads/main | refs/heads/develop)
+            branch="${remote_ref#refs/heads/}"
+            echo "" >&2
+            echo "pre-push: push directo a '$branch' bloqueado." >&2
+            echo "  Crea una rama de trabajo y abre un Pull Request hacia develop:" >&2
+            echo "    git checkout -b feature/<descripcion>" >&2
+            echo "    git push -u origin feature/<descripcion>" >&2
+            echo "  Flujo completo: CONTRIBUTING.md" >&2
+            echo "" >&2
+            exit 1
+            ;;
+    esac
+done
+
+exit 0

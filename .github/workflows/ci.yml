@@ -6,32 +6,100 @@ on:
   pull_request:
     branches: [main, develop]
 
+permissions:
+  contents: read
+
 jobs:
-  lint-and-test:
+  pipeline:
+    name: Pipeline IA (lint + tests)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/pipeline_ai
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: "pip"
+          cache-dependency-path: |
+            services/pipeline_ai/requirements.txt
+            services/pipeline_ai/requirements-dev.txt
 
       - name: Instalar dependencias
-        run: |
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
+        run: pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Lint (ruff)
-        run: ruff check app tests
+        run: ruff check pipeline_ai tests eval
 
       - name: Formato (black --check)
-        run: black --check app tests
+        run: black --check pipeline_ai tests eval
 
       - name: Tests (pytest)
         run: pytest -v
         env:
-          # Variables dummy: los tests no deben requerir servicios reales
-          # ni credenciales reales (ver app/config.py Settings.require).
+          # Los tests no requieren servicios reales ni credenciales reales
+          # (ver pipeline_ai/config.py Settings.require).
           ANTHROPIC_API_KEY: ""
+
+  web:
+    name: GUI (lint + typecheck + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+        env:
+          API_INTERNAL_URL: http://mhia-api:8000
+
+  secrets-scan:
+    name: Escaneo de secretos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # CLI oficial vía Docker (la acción gitleaks-action pide licencia en organizaciones).
+      - name: gitleaks
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+            detect --source /repo --no-banner --redact --verbose
+
+  docker:
+    name: Docker (compose válido + build amd64/arm64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validar compose (con .env.example)
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.yml -f docker-compose.gpu.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.mac.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.dev.yml config --quiet
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # La Mac mini es ARM64: verificamos que la imagen de la API compile ahí.
+      - name: Build API (linux/amd64 + linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: services/pipeline_ai
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

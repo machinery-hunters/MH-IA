@@ -1,130 +1,90 @@
 # Instalación — qué poner en cada máquina
 
-Este documento es el checklist de instalación. `DEPLOYMENT.md` explica cómo
-levantar el stack una vez instalado esto; `INGESTION.md` cubre la ingesta de
-Drive.
+Checklist de instalación. `DEPLOYMENT.md` explica cómo levantar el stack;
+`INGESTION.md` cubre la ingesta de Drive.
 
 ---
 
-## A. Laptop de desarrollo (Acer Predator Helios Neo 16S AI · Core Ultra 9 · RTX 5070 Ti 12GB · 32GB RAM)
+## A. Laptop de desarrollo (Windows + PowerShell)
 
-### A.1 Software base (obligatorio)
+Acer Predator Helios Neo 16S AI · Core Ultra 9 · RTX 5070 Ti 12 GB · 32 GB RAM.
+
+### A.1 Software base
 
 | Software | Para qué | Notas |
 |---|---|---|
-| **Git** | Clonar el repo, control de versiones | git-scm.com |
-| **Docker Desktop** (última versión) | Correr Qdrant + la app + Ollama containerizado | En Windows, backend **WSL2** (no Hyper-V) |
-| **Driver NVIDIA** actualizado (≥ 550.x) | Que la GPU sea visible para Docker | Se instala desde el sitio de NVIDIA, no dentro de WSL |
-| **Python 3.12** | Desarrollo/lint/tests fuera de Docker | python.org, o `pyenv` |
-| **Node.js no es necesario** | — | El proyecto es 100% Python |
+| Git | Control de versiones | |
+| Docker Desktop (última) | Qdrant, API, GUI y Ollama en contenedores | Backend **WSL2** con soporte de GPU |
+| Driver NVIDIA (≥ 550.x) | GPU visible para Docker | Se instala en Windows, no dentro de WSL |
+| Python 3.12 | Lint y pruebas del pipeline fuera de Docker | CI usa 3.12 |
+| Node.js 22 LTS o superior | Desarrollo, lint y build de la GUI | |
+| Tailscale (pendiente) | Acceso remoto | Ver `DEPLOYMENT.md`, sección 3 |
 
-### A.2 Soporte de GPU en Docker (para que Ollama use la RTX 5070 Ti)
+### A.2 Clonar y preparar
 
-- **Windows con WSL2 + Docker Desktop**: basta con tener el driver NVIDIA para Windows actualizado y la opción *"Use the WSL 2 based engine"* + *GPU support* habilitada en Docker Desktop. WSL2 expone la GPU automáticamente, no se instala driver dentro de la distro Linux.
-- **Linux nativo**: instalar `nvidia-container-toolkit`:
-  ```bash
-  sudo apt-get install -y nvidia-container-toolkit
-  sudo nvidia-ctk runtime configure --runtime=docker
-  sudo systemctl restart docker
-  ```
-- **Verificar** (ambos casos):
-  ```bash
-  docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
-  ```
-  Si esto muestra la RTX 5070 Ti, todo lo demás funcionará.
-
-### A.3 Clonar y preparar el proyecto
-
-```bash
+```powershell
 git clone <URL_DEL_REPO> mh-ia
 cd mh-ia
-cp .env.example .env        # editar ANTHROPIC_API_KEY como mínimo
+Copy-Item .env.example .env       # editar ANTHROPIC_API_KEY como mínimo
+.\scripts\dev.ps1 doctor          # valida compose, puertos y .env ignorado
 ```
 
-### A.4 Levantar el stack
+### A.3 Levantar el stack
 
-```bash
-make up-gpu
-docker exec -it mhia-ollama ollama pull llama3.1:8b
-docker exec -it mhia-ollama ollama pull nomic-embed-text
+```powershell
+.\scripts\dev.ps1 up
+.\scripts\dev.ps1 pull-models
 ```
 
-### A.5 (Opcional) Entorno local sin Docker, para iterar rápido en el código
+### A.4 Entorno local para iterar (lint, pruebas, GUI)
 
-Útil para correr `pytest`, `ruff`, o `python -m app.main` directo mientras
-Qdrant/Ollama siguen corriendo en Docker.
+```powershell
+.\scripts\dev.ps1 venv            # crea services\pipeline_ai\.venv con Python 3.12
+.\scripts\dev.ps1 test
+.\scripts\dev.ps1 lint
 
-```bash
-make venv
-source .venv/bin/activate     # .venv\Scripts\activate en cmd de Windows
-# En este modo, OLLAMA_BASE_URL y QDRANT_URL en .env deben apuntar a
-# localhost (los puertos ya están expuestos por docker-compose.yml):
-#   OLLAMA_BASE_URL=http://localhost:11434
-#   QDRANT_URL=http://localhost:6333
-python -m app.main "¿cuál es el estatus del lote 42?"
+cd web
+npm ci
+npm run dev                       # GUI en http://localhost:3000
 ```
 
 ---
 
-## B. Mac Mini M4 Pro (producción)
-
-### B.1 Software base
+## B. Mac mini M5 Pro (producción, zsh)
 
 | Software | Para qué |
 |---|---|
-| **Git** | Clonar el repo |
-| **Docker Desktop for Mac** (Apple Silicon) | Correr Qdrant + la app |
-| **Homebrew** | Instalar Ollama nativo |
-| **Ollama** (nativo, no Docker) | `brew install ollama` — usa Metal directamente |
+| Git | Clonar el repo |
+| Docker Desktop for Mac (Apple Silicon) | Qdrant, API y GUI |
+| Homebrew | Instalar Ollama y Tailscale |
+| Ollama (nativo, no Docker) | `brew install ollama` — usa Metal |
+| Tailscale | Acceso remoto privado (ver `DEPLOYMENT.md`) |
 
-### B.2 Instalación
-
-```bash
-brew install ollama git
-ollama pull llama3.1:8b
-ollama pull nomic-embed-text
-brew services start ollama      # deja Ollama corriendo como servicio en background
-
-git clone <URL_DEL_REPO> mh-ia
-cd mh-ia
-cp .env.example .env            # editar ANTHROPIC_API_KEY
-```
-
-### B.3 Levantar el stack
-
-```bash
-make up-mac
-```
-
-### B.4 Acceso remoto (Tailscale)
-
-```bash
-brew install tailscale
-sudo tailscale up
-```
-Después, el equipo autorizado accede a los servicios expuestos por Tailscale
-en vez de exponer puertos a internet (ver RNF-03 en el SRS).
+Pasos completos y checklist de migración en `DEPLOYMENT.md`, secciones 2 y 4.
 
 ---
 
-## C. Credenciales necesarias (ambas máquinas)
+## C. Credenciales necesarias
 
 | Credencial | Dónde se obtiene | Dónde se coloca |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | console.anthropic.com | `.env` |
-| `service_account.json` (Google Drive) | Google Cloud Console → Service Accounts (ver `INGESTION.md`) | `./credentials/service_account.json` |
-| `GOOGLE_DRIVE_FOLDER_ID` | URL de la carpeta compartida en Drive | `.env` |
-| `ERPNEXT_API_KEY` / `ERPNEXT_API_SECRET` (Fase 2) | Frappe/ERPNext → Settings → API Access, usuario de solo lectura | `.env` |
+| `API_SESSION_SECRET` (≥ 32 caracteres) | Generarlo (ver `.env.example`) | `.env` |
+| `service_account.json` (Drive) | Google Cloud Console → Service Accounts (ver `INGESTION.md`) | `credentials/` |
+| `GOOGLE_DRIVE_FOLDER_ID` | URL de la carpeta compartida | `.env` |
+| `ERPNEXT_*` (solo lectura) | Frappe/ERPNext → API Access (cuando el proveedor lo entregue) | `.env` |
+| `GHL_API_TOKEN`, `GHL_LOCATION_ID` (solo lectura) | GoHighLevel → integración privada | `.env` |
+| `FIRESTORE_*`, `SUPABASE_*` (solo lectura) | Firebase / Supabase | `.env` y `credentials/` |
 
-**Ninguna de estas credenciales se versiona en git** — `.gitignore` ya excluye
-`.env` y `credentials/*.json`.
+**Ninguna se versiona en git.** `.gitignore` excluye `.env`, `.env.*`
+(salvo `.env.example`), `credentials/*.json`, `*.pem` y `*.key`.
 
 ---
 
-## D. Verificación rápida post-instalación
+## D. Verificación rápida
 
-```bash
-docker compose ps                 # qdrant y mhia-app en estado "healthy"/"running"
-curl http://localhost:6333/collections   # Qdrant responde
-docker exec -it mhia-app python -m pytest -q   # tests pasan dentro del contenedor también
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml ps       # todo "healthy"
+Invoke-WebRequest http://127.0.0.1:8000/health -UseBasicParsing         # {"status":"ok"}
+docker exec -it mhia-api python -c "import urllib.request as u; print(u.urlopen('http://qdrant:6333/collections').read())"
 ```

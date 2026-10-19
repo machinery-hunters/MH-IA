@@ -1,0 +1,13 @@
+# Solo desarrollo: monta el código para iterar sin reconstruir la imagen y
+# activa recarga automática. NO usar en producción (mounts de código,
+# filesystem escribible).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.dev.yml up -d --build
+
+services:
+  mhia-api:
+    read_only: false
+    volumes:
+      - ./services/pipeline_ai/pipeline_ai:/app/pipeline_ai
+      - ./services/pipeline_ai/eval:/app/eval
+    command: ["uvicorn", "pipeline_ai.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
