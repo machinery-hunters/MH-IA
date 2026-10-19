@@ -31,3 +31,9 @@ web/*.tsbuildinfo
 # SO / editor
 .DS_Store
 Thumbs.db
+
+# Resultados del laboratorio (datos sinteticos, pero no tienen por que versionarse)
+services/pipeline_ai/lab/results/
+
+# Preferencias locales de Claude Code (plugins activos por usuario)
+.claude/settings.local.json

@@ -1,0 +1,18 @@
+CONTRATO DE CONSIGNACION CONS-2026-034 (DOCUMENTO SINTETICO DE PRUEBA)
+
+Consignante: Grupo Industrial Ejemplo SA de CV
+RFC: GIE050505XY2
+Representante: Ricardo Valdez Orozco
+Correo: ricardo.valdez@grupo-ejemplo.example
+
+Machinery Hunters recibe en consignacion 6 equipos del consignante, con una comision del 8% sobre el precio de venta.
+
+Estado de la consignacion al cierre de septiembre:
+- Excavadora CAT 320 (2018): vendida.
+- Cargador frontal Komatsu WA320 (2017): vendido.
+- Retroexcavadora John Deere 310L (2016): sin vender.
+- Motoconformadora CAT 140M (2014): sin vender.
+- Compactador Dynapac CA250 (2015): sin vender.
+- Minicargador Bobcat S650 (2019): sin vender.
+
+Resumen: 2 equipos vendidos y 4 sin vender. Vigencia del contrato hasta diciembre de 2026, renovable.
