@@ -16,7 +16,8 @@ sección 3, y mandan el orden.
 
 1. **[Hecho el 19 oct 2026] Outbound gateway** (`privacy/outbound_gateway.py`): la consulta y el contexto se anonimizan juntos, las fuentes viajan con alias, hay auditoría con hash y `claude_node` solo lee el payload del gateway. Prueba de extremo a extremo en `tests/test_graph_privacy_e2e.py`.
 2. **[Hecho el 19 oct 2026] Scrubber determinista** (`privacy/scrubber.py`) y bloqueo si quedan hallazgos. Pendiente de este punto: medir falsos positivos con el Ollama real (SECURITY.md, sección 3).
-   - **[Hecho el 19 oct 2026] Anonimizador determinista** (`privacy/redactor.py`, `nodes/ollama_node.py`): el código redacta datos estructurados y reemplaza nombres; el modelo local solo los detecta. Laboratorio sintético: 14/14 respondidas, 0 fugas. Pendiente: calibrar el umbral de relevancia, alinear la versión de Qdrant, extraer entidades al ingestar.
+   - **[Hecho el 19 oct 2026] Anonimizador determinista** (`privacy/redactor.py`, `nodes/ollama_node.py`): el código redacta datos estructurados y reemplaza nombres; el modelo local solo los detecta. Laboratorio sintético: 14/14 respondidas, 0 fugas. Pendiente: extraer entidades al ingestar.
+   - **[Hecho el 19 oct 2026] Calibración de recuperación y Qdrant v1.19.1.** Un umbral absoluto no separa relevante de irrelevante con nomic-embed-text (lab/calibrar_umbral.py); se añadió corte relativo (RETRIEVAL_SCORE_MARGIN). Pendiente: búsqueda híbrida o reranking para mejorar el ranking (4 de 19 preguntas no dejan el documento correcto primero).
 3. **Login y sesiones** en la API; roles reales; TOTP para `control_total`.
 4. **Filtrado por rol en Qdrant** (payload `sensitivity`, `allowed_roles`) y pruebas de que cada rol solo ve lo suyo.
 5. Resolver las 3 fallas del eval del router y añadir casos adversariales.
