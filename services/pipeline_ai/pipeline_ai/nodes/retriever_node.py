@@ -64,6 +64,15 @@ async def retriever_node(state: MHIAState) -> dict:
     accepted = [
         (doc, score) for doc, score in results if score >= settings.retrieval_score_threshold
     ]
+    # Minimización: a Claude solo viajan los fragmentos cercanos al mejor (el piso absoluto no
+    # basta, ver config). Un margen <= 0 lo desactiva.
+    if accepted and settings.retrieval_score_margin > 0:
+        best = max(score for _, score in accepted)
+        accepted = [
+            (doc, score)
+            for doc, score in accepted
+            if score >= best - settings.retrieval_score_margin
+        ]
 
     if not accepted:
         return {

@@ -27,7 +27,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $service = Join-Path $root 'services\pipeline_ai'
 $py = Join-Path $service '.venv\Scripts\python.exe'
 $container = 'mhia-lab-qdrant'
-$qdrantImage = 'qdrant/qdrant:v1.11.0'
+$qdrantImage = 'qdrant/qdrant:v1.19.1'  # misma version que docker-compose.yml y qdrant-client
 
 function Fail([string]$msg) { Write-Host "ERROR: $msg" -ForegroundColor Red; exit 1 }
 

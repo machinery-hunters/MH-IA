@@ -1,0 +1,197 @@
+[
+  {
+    "id": "p01",
+    "query": "?Qu? equipo se le cotiz? a Constructora Ficticia del Norte y en cu?nto?",
+    "expected_sources": [
+      "Cotizacion_Excavadora_Ficticia.txt"
+    ]
+  },
+  {
+    "id": "p02",
+    "query": "?Cu?nto es el anticipo que pide la cotizaci?n de la excavadora?",
+    "expected_sources": [
+      "Cotizacion_Excavadora_Ficticia.txt"
+    ]
+  },
+  {
+    "id": "p03",
+    "query": "?Cu?ntas m?quinas de la consignaci?n de Grupo Industrial Ejemplo siguen sin vender?",
+    "expected_sources": [
+      "Consignacion_Grupo_Ejemplo.txt"
+    ]
+  },
+  {
+    "id": "p04",
+    "query": "?Qu? equipos hay en el patio de Mexicali y cu?les est?n disponibles?",
+    "expected_sources": [
+      "Inventario_Patio_Mexicali.csv"
+    ]
+  },
+  {
+    "id": "p05",
+    "query": "?Qu? tarifas maneja el proveedor de transporte entre Mexicali y Zapopan?",
+    "expected_sources": [
+      "Proveedor_Transportes_Ficticios.txt"
+    ]
+  },
+  {
+    "id": "p06",
+    "query": "?Cu?l fue el ingreso total de septiembre?",
+    "expected_sources": [
+      "Resumen_Financiero_Septiembre.txt"
+    ]
+  },
+  {
+    "id": "p07",
+    "query": "?Cu?ntos d?as de vacaciones corresponden al cumplir un a?o de antig?edad?",
+    "expected_sources": [
+      "Politica_Vacaciones.txt"
+    ]
+  },
+  {
+    "id": "p08",
+    "query": "?Cu?l es el horario de la oficina de Mexicali?",
+    "expected_sources": [
+      "Guia_Horarios_y_Contactos.txt"
+    ]
+  },
+  {
+    "id": "p09",
+    "query": "Dame el historial de la empresa con RFC CFN010101AB1 y su contacto laura.mendoza@constructora-ficticia.example",
+    "expected_sources": [
+      "Cotizacion_Excavadora_Ficticia.txt",
+      "Seguimiento_Clientes_Q3.txt"
+    ]
+  },
+  {
+    "id": "p10",
+    "query": "?Cu?l es la CLABE del proveedor de transporte?",
+    "expected_sources": [
+      "Proveedor_Transportes_Ficticios.txt"
+    ]
+  },
+  {
+    "id": "p11",
+    "query": "?Cu?nto pagamos de n?mina en septiembre y cu?ntos empleados son?",
+    "expected_sources": [
+      "Resumen_Financiero_Septiembre.txt"
+    ]
+  },
+  {
+    "id": "c01",
+    "query": "precio de la excavadora que se cotiz?",
+    "expected_sources": [
+      "Cotizacion_Excavadora_Ficticia.txt"
+    ]
+  },
+  {
+    "id": "c02",
+    "query": "a qu? hora abren y cierran",
+    "expected_sources": [
+      "Guia_Horarios_y_Contactos.txt"
+    ]
+  },
+  {
+    "id": "c03",
+    "query": "cu?ntos d?as de descanso me tocan al a?o",
+    "expected_sources": [
+      "Politica_Vacaciones.txt"
+    ]
+  },
+  {
+    "id": "c04",
+    "query": "cu?nto cobran de flete",
+    "expected_sources": [
+      "Proveedor_Transportes_Ficticios.txt"
+    ]
+  },
+  {
+    "id": "c05",
+    "query": "gastos y utilidad del mes pasado",
+    "expected_sources": [
+      "Resumen_Financiero_Septiembre.txt"
+    ]
+  },
+  {
+    "id": "c06",
+    "query": "qu? equipos siguen en consignaci?n",
+    "expected_sources": [
+      "Consignacion_Grupo_Ejemplo.txt"
+    ]
+  },
+  {
+    "id": "c07",
+    "query": "m?quinas disponibles en el patio",
+    "expected_sources": [
+      "Inventario_Patio_Mexicali.csv"
+    ]
+  },
+  {
+    "id": "c08",
+    "query": "en qu? va el cliente de la constructora",
+    "expected_sources": [
+      "Seguimiento_Clientes_Q3.txt",
+      "Cotizacion_Excavadora_Ficticia.txt"
+    ]
+  },
+  {
+    "id": "n01",
+    "query": "?Cu?l es la receta del mole poblano?",
+    "expected_sources": []
+  },
+  {
+    "id": "n02",
+    "query": "?Qu? clima har? ma?ana en Mexicali?",
+    "expected_sources": []
+  },
+  {
+    "id": "n03",
+    "query": "?Qui?n gan? el ?ltimo mundial de futbol?",
+    "expected_sources": []
+  },
+  {
+    "id": "n04",
+    "query": "?C?mo se escribe un bucle for en Python?",
+    "expected_sources": []
+  },
+  {
+    "id": "n05",
+    "query": "?Cu?l es la capital de Francia?",
+    "expected_sources": []
+  },
+  {
+    "id": "n06",
+    "query": "cu?ntame un chiste",
+    "expected_sources": []
+  },
+  {
+    "id": "n07",
+    "query": "?Cu?l es la mejor estrategia para invertir en bolsa?",
+    "expected_sources": []
+  },
+  {
+    "id": "n08",
+    "query": "?C?mo se dice hola en japon?s?",
+    "expected_sources": []
+  },
+  {
+    "id": "h01",
+    "query": "?Cu?l es el protocolo de seguridad para operar la gr?a del patio de Guadalajara?",
+    "expected_sources": []
+  },
+  {
+    "id": "h02",
+    "query": "?Cu?nto cuesta una excavadora Komatsu nueva en Jap?n?",
+    "expected_sources": []
+  },
+  {
+    "id": "h03",
+    "query": "?Cu?l es la pol?tica de trabajo remoto de la empresa?",
+    "expected_sources": []
+  },
+  {
+    "id": "h04",
+    "query": "?Qu? comisi?n cobra el vendedor por cada m?quina vendida?",
+    "expected_sources": []
+  }
+]

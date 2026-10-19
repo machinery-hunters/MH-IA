@@ -32,7 +32,12 @@ class Settings:
     # ── Qdrant ───────────────────────────────────────────────────────────
     qdrant_url: str = os.getenv("QDRANT_URL", "http://localhost:6333")
     qdrant_collection: str = os.getenv("QDRANT_COLLECTION", "mhia_drive_docs")
-    retrieval_score_threshold: float = float(os.getenv("RETRIEVAL_SCORE_THRESHOLD", "0.5"))
+    # Piso absoluto de score. Con nomic-embed-text NO separa relevante de irrelevante (en el
+    # laboratorio hay negativos de 0.71 y positivos de 0.57): solo descarta lo claramente ajeno.
+    retrieval_score_threshold: float = float(os.getenv("RETRIEVAL_SCORE_THRESHOLD", "0.6"))
+    # Corte relativo (minimización de datos): solo se conservan los fragmentos cuyo score está
+    # a menos de `margen` del mejor. 0 = desactivado (solo piso absoluto).
+    retrieval_score_margin: float = float(os.getenv("RETRIEVAL_SCORE_MARGIN", "0.06"))
 
     # ── Anonimizador local ───────────────────────────────────────────────
     # Tope de tiempo (s) por llamada al LLM local que detecta nombres propios. Si se excede,

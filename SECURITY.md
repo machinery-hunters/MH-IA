@@ -48,7 +48,7 @@ local de ramas; primer paso de la Fase 1 del plan).
 | Riesgo | Por qué se acepta | Revisar cuando |
 |---|---|---|
 | Qdrant sin API key | No publica puerto; solo `mhia-api` está en su red | Si algún otro servicio entra a la red `backend` o se publica un puerto |
-| Qdrant `v1.11.0` y `ollama:latest` sin versión probada/pineada | Actualizar sin pruebas de reindexación puede romper el almacenamiento; se fijará al migrar a la Mac mini | Antes de producción |
+| Qdrant `v1.19.1` (alineado con `qdrant-client` 1.19.x) y `ollama:latest` sin versión pineada | Qdrant se subió de v1.11.0 sin datos de producción; un volumen creado con la versión anterior puede no abrir y hay que reindexar. Ollama se fijará al migrar a la Mac mini | Antes de producción; al subir Qdrant o el cliente, subir ambos |
 | Qdrant y Ollama pueden salir a internet | Ollama lo necesita para `ollama pull`. Qdrant comparte la red | Si se descarga modelos por otra vía y se aísla `backend` con `internal: true` |
 | CSP con `'unsafe-inline'` en `script-src` | Next.js inyecta scripts de arranque en línea | Al implementar CSP con nonce |
 | Volumen de Qdrant y `.env` sin cifrado propio | Dependen del cifrado de disco del equipo (BitLocker en la laptop, FileVault en la Mac mini) | Activarlo y confirmarlo como parte de `deploy-checklist` |
@@ -77,7 +77,7 @@ por la API**: `POST /api/v1/query` responde 501.
 7. **Inyección de instrucciones vía documentos.** Un documento de Drive o un registro del CRM puede contener texto que intente instruir al modelo. Mitigación prevista: el nodo Claude no tiene herramientas ni acciones (solo produce texto), el contexto va delimitado y la respuesta exige citas; falta una prueba adversarial.
 8. **Eval del router al 89 %** con 3 fallas conocidas sin resolver; ahora, además, el piso por conector cubre ERP/CRM/Firestore, pero Drive sigue dependiendo del router y del mapeo de carpetas.
 9. **Listas blancas de campos** de ERP, CRM y Firestore por construir (llegan con cada conector).
-10. **Umbral de relevancia sin calibrar.** En el laboratorio, `RETRIEVAL_SCORE_THRESHOLD=0.5` no discrimina (una pregunta sin relación, "receta del mole", obtuvo 0.59 y llegó a Claude). Pendiente calibrar con un conjunto dorado. **Backups y restauración** de Qdrant y del manifest, **rotación de secretos**, **escaneo de dependencias e imágenes** (Dependabot/Trivy): sin implementar.
+10. **La recuperación no distingue bien lo irrelevante.** Medido con `lab/calibrar_umbral.py` y 31 preguntas (`lab/retrieval_golden.json`): con nomic-embed-text ningún umbral absoluto separa relevante de irrelevante (negativos hasta 0.71, positivos desde 0.57), y en 4 de 19 preguntas el documento correcto no queda primero. Mitigación aplicada: piso 0.60 y corte relativo `RETRIEVAL_SCORE_MARGIN=0.06`, que mantiene la misma recuperación (16/19) y baja de ~4 a ~1.6 los fragmentos irrelevantes que viajan a Claude. Persiste: con scores planos (pregunta sin respuesta en los documentos) siguen viajando hasta 5 fragmentos, anonimizados; Claude responde que no tiene información (q10), pero la minimización no es total. Pendiente: búsqueda híbrida (denso + palabras clave) o reranking. **Backups y restauración** de Qdrant y del manifest, **rotación de secretos**, **escaneo de dependencias e imágenes** (Dependabot/Trivy): sin implementar.
 11. **Sin CSP con nonce** ni protección CSRF explícita (la cookie de sesión será `SameSite=Strict`; se verificará al implementar el login).
 
 ---
