@@ -93,6 +93,22 @@ class Settings:
     # ── API / acceso ─────────────────────────────────────────────────────
     # Secreto para firmar sesiones. OBLIGATORIO (>= 32 caracteres) en producción.
     api_session_secret: str = os.getenv("API_SESSION_SECRET", "")
+    # Clave Fernet (base64 urlsafe de 32 bytes) que cifra en reposo los secretos TOTP.
+    # OBLIGATORIA en producción. Generar: python -m pipeline_ai.security.manage gen-key
+    api_totp_key: str = os.getenv("API_TOTP_KEY", "")
+
+    # ── Autenticación ───────────────────────────────────────────────────
+    # Base SQLite de usuarios, sesiones e intentos (volumen ./data, fuera de git).
+    auth_db_path: str = os.getenv("AUTH_DB_PATH", "/app/data/auth.db")
+    # Sesión: caduca por inactividad y, pase lo que pase, por antigüedad absoluta.
+    session_idle_s: int = int(os.getenv("SESSION_IDLE_S", "1800"))
+    session_absolute_s: int = int(os.getenv("SESSION_ABSOLUTE_S", "43200"))
+    # Fuerza bruta: tras N fallos seguidos de un usuario se bloquea su login `lock_s` segundos.
+    login_max_failures: int = int(os.getenv("LOGIN_MAX_FAILURES", "5"))
+    login_lock_s: int = int(os.getenv("LOGIN_LOCK_S", "900"))
+    # Cookie `Secure`: obligatoria en producción (HTTPS del tailnet). En desarrollo local
+    # (http://localhost) se puede apagar con API_COOKIE_SECURE=false.
+    cookie_secure: bool = _env_bool("API_COOKIE_SECURE", os.getenv("MHIA_ENV") == "production")
     # Hosts que la API acepta en la cabecera Host (anti Host-header attacks).
     # Incluye el nombre del tailnet en producción (ver .env.example).
     api_allowed_hosts: tuple[str, ...] = _env_list(
@@ -131,9 +147,20 @@ class Settings:
             return
         if self.debug:
             raise RuntimeError("MHIA_DEBUG debe ser false cuando MHIA_ENV=production.")
-        self.require("anthropic_api_key", "api_session_secret")
+        self.require("anthropic_api_key", "api_session_secret", "api_totp_key")
         if len(self.api_session_secret) < 32:
             raise RuntimeError("API_SESSION_SECRET debe tener al menos 32 caracteres.")
+        if not self.cookie_secure:
+            raise RuntimeError("API_COOKIE_SECURE debe ser true cuando MHIA_ENV=production.")
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(self.api_totp_key.encode())
+        except Exception as exc:  # noqa: BLE001 - mensaje claro sin eco de la clave
+            raise RuntimeError(
+                "API_TOTP_KEY no es una clave Fernet válida "
+                "(genera una con: python -m pipeline_ai.security.manage gen-key)."
+            ) from exc
 
 
 settings = Settings()
