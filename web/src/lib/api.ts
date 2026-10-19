@@ -9,6 +9,8 @@
  * origen vía el proxy de Next); este código nunca ve ni guarda el token.
  */
 
+import type { QueryStatus } from "@/lib/query-helpers";
+
 export type Permission =
   | "query"
   | "query_confidential"
@@ -27,6 +29,19 @@ export interface ConnectorStatus {
   display_name: string;
   sensitivity: "public" | "internal" | "confidential" | "restricted";
   configured: boolean;
+}
+
+/**
+ * answered: respuesta fundamentada, con las fuentes consultadas.
+ * no_evidence: sin información suficiente que este usuario pueda ver (o sin nada relevante).
+ * blocked: el control de privacidad no autorizó el envío; no se consultó al servicio externo.
+ */
+export type { QueryStatus };
+
+export interface QueryResponse {
+  status: QueryStatus;
+  answer: string;
+  sources: string[];
 }
 
 export interface LoginInput {
@@ -117,8 +132,12 @@ export const api = {
     }),
   logout: () => request<void>("/api/v1/auth/logout", { method: "POST" }),
   connectors: () => request<ConnectorStatus[]>("/api/v1/connectors"),
-  query: (query: string) =>
-    request<unknown>("/api/v1/query", { method: "POST", body: JSON.stringify({ query }) }),
+  query: (query: string, signal?: AbortSignal) =>
+    request<QueryResponse>("/api/v1/query", {
+      method: "POST",
+      body: JSON.stringify({ query }),
+      signal,
+    }),
 };
 
 export function can(me: Me | null, permission: Permission): boolean {

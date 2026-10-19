@@ -71,7 +71,6 @@ def test_query_validates_input_server_side():
     c = _client(Role.CONSULTA)
     assert c.post("/api/v1/query", json={"query": ""}).status_code == 422
     assert c.post("/api/v1/query", json={"query": "x" * 2001}).status_code == 422
-
-
-def test_query_is_not_implemented_yet():
-    assert _client(Role.CONSULTA).post("/api/v1/query", json={"query": "hola"}).status_code == 501
+    assert c.post("/api/v1/query", json={"query": "   \n\t "}).status_code == 422
+    assert c.post("/api/v1/query", json={}).status_code == 422
+    assert c.post("/api/v1/query", json={"query": 123}).status_code == 422

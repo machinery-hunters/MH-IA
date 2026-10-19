@@ -37,6 +37,11 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
 
+  // El proxy de rewrites corta a los 30 s por defecto, y una consulta (router + recuperación +
+  // anonimizador local + Claude) puede tardar más. Debe quedar POR ENCIMA de QUERY_TIMEOUT_S de
+  // la API (120 s): si no, Next corta antes y el usuario ve un error en vez del 504 de la API.
+  experimental: { proxyTimeout: 130_000 },
+
   // La GUI habla con la API por el mismo origen: sin CORS y las cookies de
   // sesión nunca viajan a otro dominio.
   async rewrites() {

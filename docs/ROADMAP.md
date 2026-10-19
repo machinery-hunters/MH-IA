@@ -19,7 +19,7 @@ sección 3, y mandan el orden.
    - **[Hecho el 19 oct 2026] Anonimizador determinista** (`privacy/redactor.py`, `nodes/ollama_node.py`): el código redacta datos estructurados y reemplaza nombres; el modelo local solo los detecta. Laboratorio sintético: 14/14 respondidas, 0 fugas. Pendiente: extraer entidades al ingestar.
    - **[Hecho el 19 oct 2026] Calibración de recuperación y Qdrant v1.19.1.** Un umbral absoluto no separa relevante de irrelevante con nomic-embed-text (lab/calibrar_umbral.py); se añadió corte relativo (RETRIEVAL_SCORE_MARGIN). Pendiente: búsqueda híbrida o reranking para mejorar el ranking (4 de 19 preguntas no dejan el documento correcto primero).
 3. **[Hecho el 19 oct 2026, backend] Login y sesiones** (`security/auth.py`, `api/auth_routes.py`): argon2id, sesiones en servidor, freno a la fuerza bruta, TOTP obligatorio para `control_total`, usuarios por CLI (`python -m pipeline_ai.security.manage`). **[Hecho el 19 oct 2026] Pantalla de login en la GUI** (`web/src/app/login`, guardia de sesión en todas las pantallas, TOTP, logout). Pendiente: cambio de contraseña, cablear `POST /api/v1/query` con el usuario de la sesión.
-4. **Filtrado por rol en Qdrant** (payload `sensitivity`, `allowed_roles`) y pruebas de que cada rol solo ve lo suyo.
+4. **[Hecho el 19 oct 2026] Filtrado por rol en Qdrant** por dominio del fragmento (`security/access.py`, `nodes/retriever_node.py`), con segunda capa en el retriever y pruebas de que cada rol solo ve lo suyo (también con Qdrant, Ollama y Claude reales). Pendiente: `allowed_roles` por documento.
 5. Resolver las 3 fallas del eval del router y añadir casos adversariales.
 
 *Salida:* ningún dato crudo ni nombre sensible llega a Claude (prueba automática); todos los endpoints exigen sesión y permiso; `SECURITY.md` sección 3 sin los puntos 1–5.
@@ -29,7 +29,7 @@ sección 3, y mandan el orden.
 - Adaptar `retriever_node` a `DriveConnector` sin reescribir la recuperación.
 - Cablear el supervisor en `graph.py` con `Send`; consolidar con `agents/supervisor.py`.
 - Que Claude reciba la lista de fuentes no disponibles.
-- Conectar `POST /api/v1/query` al grafo.
+- **[Hecho el 19 oct 2026]** `POST /api/v1/query` conectado al grafo actual (un solo flujo sobre Drive) con el usuario y el rol de la sesión; `/consultar` muestra respuesta y fuentes. Pendiente: reemplazar ese flujo por el supervisor multi-agente.
 
 *Salida:* una consulta sobre Drive pasa por supervisor → sub-agente → gateway → Claude, con citas, y aborta sin evidencia.
 

@@ -89,6 +89,11 @@ class Settings:
     timeout_crm_s: float = float(os.getenv("TIMEOUT_CRM_S", "10"))
     timeout_firestore_s: float = float(os.getenv("TIMEOUT_FIRESTORE_S", "10"))
     timeout_global_s: float = float(os.getenv("TIMEOUT_GLOBAL_S", "30"))
+    # POST /api/v1/query: tope total por consulta (router + recuperación + anonimizador local +
+    # Claude) y consultas simultáneas. Ollama corre en un solo equipo: sin tope, una ráfaga lo
+    # satura y las demás consultas se acumulan.
+    query_timeout_s: float = float(os.getenv("QUERY_TIMEOUT_S", "120"))
+    query_max_concurrency: int = int(os.getenv("QUERY_MAX_CONCURRENCY", "2"))
 
     # ── API / acceso ─────────────────────────────────────────────────────
     # Secreto para firmar sesiones. OBLIGATORIO (>= 32 caracteres) en producción.
