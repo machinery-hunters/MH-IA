@@ -14,8 +14,8 @@ sección 3, y mandan el orden.
 
 ## Fase 1 — Cerrar la frontera de privacidad y la autenticación (primero)
 
-1. **Outbound gateway** (`privacy/outbound_gateway.py`): anonimizar la consulta, alias de nombres de fuente, auditoría con hash. Reescribir `claude_node` para que solo lo use.
-2. **Scrubber determinista** (`privacy/scrubber.py`) y bloqueo si quedan hallazgos.
+1. **[Hecho el 19 oct 2026] Outbound gateway** (`privacy/outbound_gateway.py`): la consulta y el contexto se anonimizan juntos, las fuentes viajan con alias, hay auditoría con hash y `claude_node` solo lee el payload del gateway. Prueba de extremo a extremo en `tests/test_graph_privacy_e2e.py`.
+2. **[Hecho el 19 oct 2026] Scrubber determinista** (`privacy/scrubber.py`) y bloqueo si quedan hallazgos. Pendiente de este punto: medir falsos positivos con el Ollama real (SECURITY.md, sección 3).
 3. **Login y sesiones** en la API; roles reales; TOTP para `control_total`.
 4. **Filtrado por rol en Qdrant** (payload `sensitivity`, `allowed_roles`) y pruebas de que cada rol solo ve lo suyo.
 5. Resolver las 3 fallas del eval del router y añadir casos adversariales.

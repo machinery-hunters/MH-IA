@@ -22,6 +22,7 @@ def test_graph_has_expected_nodes():
         "router",
         "retriever",
         "anonymizer",
+        "outbound_gateway",
         "claude_reasoner",
         "abort",
     }

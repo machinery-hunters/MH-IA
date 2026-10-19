@@ -38,9 +38,9 @@ services/pipeline_ai/
     api/          FastAPI: /health, /api/v1/me, /connectors, /query (501)
     agents/       subagent.py (aislamiento), supervisor.py (consolidación)
     connectors/   base.py + drive, erp, crm, firestore (stubs) + registry
-    privacy/      sensitivity.py, scrubber.py (stub), outbound_gateway.py (stub)
+    privacy/      sensitivity.py, scrubber.py, outbound_gateway.py
     security/     roles.py (RBAC)
-    nodes/        router, retriever, anonymizer, claude, guardrail (flujo actual)
+    nodes/        router, retriever, anonymizer, outbound gateway, claude, guardrail (flujo actual)
     ingestion/    Drive -> Qdrant (funciona hoy)
     graph.py      flujo lineal actual (sigue funcionando)
   tests/ eval/

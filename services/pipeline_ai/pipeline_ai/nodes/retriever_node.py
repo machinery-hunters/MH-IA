@@ -4,10 +4,17 @@ retriever_node
 Consulta Qdrant (embeddings generados localmente vía Ollama). Aplica el
 umbral de score de settings.retrieval_score_threshold.
 
-REGLA CRÍTICA #1 (cero alucinaciones - parte 1/2):
+REGLA CRITICA #1 (cero alucinaciones - parte 1/2):
 Si no hay documentos por encima del umbral, marca retrieval_ok=False.
 El grafo debe leer este flag en su edge condicional y saltar directo al
 nodo de aborto, SIN pasar por Claude.
+
+REGLA CRITICA #2 (privacidad - alias de fuentes):
+El contexto se arma con alias estables (Fuente_1, Fuente_2...) en lugar del
+nombre real del archivo. Así el nombre (p.ej. "Contrato_Consignacion_034.pdf")
+no entra al texto que ve el anonimizador ni, después, Claude. El mapa
+alias -> nombre real queda en `source_aliases` (solo local) y se usa para
+re-etiquetar la respuesta. `citations` conserva los nombres reales para la UI.
 """
 
 import logging
@@ -18,6 +25,7 @@ from qdrant_client import QdrantClient
 
 from pipeline_ai.config import settings
 from pipeline_ai.embeddings import TaskPrefixedOllamaEmbeddings
+from pipeline_ai.privacy.outbound_gateway import assign_source_aliases
 from pipeline_ai.state import Citation, MHIAState
 
 log = logging.getLogger("mhia.retriever")
@@ -43,7 +51,7 @@ async def retriever_node(state: MHIAState) -> dict:
     results = await _get_vectorstore().asimilarity_search_with_score(query, k=5)
 
     # Diagnóstico: siempre loguea el top-3 de scores encontrados, pase o no
-    # el umbral. Útil para calibrar RETRIEVAL_SCORE_THRESHOLD con datos
+    # el umbral. Util para calibrar RETRIEVAL_SCORE_THRESHOLD con datos
     # reales en vez de a ciegas.
     top = sorted(results, key=lambda r: r[1], reverse=True)[:3]
     log.info(
@@ -74,8 +82,12 @@ async def retriever_node(state: MHIAState) -> dict:
         for doc, score in accepted
     ]
 
+    # Alias estables por fuente: el nombre real de archivo no entra al contexto.
+    real_to_alias = assign_source_aliases(c["source"] for c in citations)
+    source_aliases = {alias: real for real, alias in real_to_alias.items()}
+
     raw_context = "\n\n---\n\n".join(
-        f"[Fuente: {c['source']}]\n{doc.page_content}"
+        f"[Fuente: {real_to_alias[c['source']]}]\n{doc.page_content}"
         for doc, c in zip(docs, citations, strict=True)
     )
 
@@ -85,7 +97,7 @@ async def retriever_node(state: MHIAState) -> dict:
     # documento"). Aquí revisamos de qué carpeta/dominio viene cada chunk
     # REALMENTE recuperado (ver pipeline_ai/ingestion/domain_mapping.py, inferido
     # de la carpeta de departamento en Drive). Si cualquiera de las dos
-    # señales dice "confidencial", se anonimiza — nunca se relaja lo que
+    # señales dice "confidencial", se anonimiza - nunca se relaja lo que
     # el router ya decidió, solo se puede volver más estricto.
     content_domains = {doc.metadata.get("domain") for doc in docs}
     is_confidential_by_content = bool(content_domains & set(settings.confidential_domains))
@@ -103,5 +115,6 @@ async def retriever_node(state: MHIAState) -> dict:
         "citations": citations,
         "retrieval_ok": True,
         "raw_context": raw_context,
+        "source_aliases": source_aliases,
         "is_confidential": is_confidential,
     }

@@ -74,9 +74,9 @@ services/pipeline_ai/
 │   ├── api/             # FastAPI: /health, /api/v1/me, /connectors, /query
 │   ├── agents/          # sub-agente (aislamiento) y supervisor (consolidación)
 │   ├── connectors/      # Drive, ERP, CRM, Firestore (stubs) + registro
-│   ├── privacy/         # sensibilidad, scrubber y outbound gateway (stubs)
+│   ├── privacy/         # sensibilidad, scrubber determinista y outbound gateway
 │   ├── security/        # roles y permisos (RBAC)
-│   ├── nodes/           # nodos del grafo actual (router, retriever, anonymizer, claude, guardrail)
+│   ├── nodes/           # nodos del grafo actual (router, retriever, anonymizer, outbound gateway, claude, guardrail)
 │   ├── ingestion/       # Google Drive -> Qdrant (funciona hoy)
 │   ├── config.py        # Settings centralizados
 │   ├── state.py         # Estado del grafo
