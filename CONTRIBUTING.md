@@ -3,7 +3,13 @@
 ## Flujo de ramas
 
 - `main` — siempre desplegable. Solo se llega por PR desde `develop`. Nunca
-  se hace `git push origin main` directo.
+  se hace `git push origin main` directo. GitHub **no aplica** la protección
+  de ramas en este repositorio privado (plan actual), así que el flujo se
+  respalda con un hook local; actívalo en cada clon:
+
+```powershell
+.\scripts\dev.ps1 hooks      # equivale a: git config core.hooksPath .githooks
+```
 - `develop` — integración de trabajo en curso. Todo PR de trabajo apunta aquí.
 - Ramas de trabajo (cortas, una por frente, se borran al fusionar):
 

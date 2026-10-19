@@ -6,8 +6,8 @@ o permisos actualiza este archivo en el mismo commit. Tres secciones:
 (decisión consciente, con su motivo) y **explícitamente no resuelto**
 (sabemos que falta; no se afirma lo contrario).
 
-Última revisión: 17 de octubre de 2026 (preparación del entorno, antes del
-desarrollo pesado posterior al 27 de noviembre de 2026).
+Última revisión: 19 de octubre de 2026 (preparación del entorno y protección
+local de ramas, antes del desarrollo pesado posterior al 27 de noviembre de 2026).
 
 ---
 
@@ -34,6 +34,7 @@ desarrollo pesado posterior al 27 de noviembre de 2026).
 | Validación de entrada en servidor (longitud de la consulta) | `api/main.py` (`QueryRequest`) | `test_query_validates_input_server_side` |
 | Lista blanca de cabecera `Host` | `TrustedHostMiddleware` | `test_untrusted_host_header_is_rejected` |
 | GUI: CSP, `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: no-referrer`, sin `X-Powered-By`; misma-origen hacia la API (sin CORS) | `web/next.config.ts` | Verificado levantando la GUI real y leyendo las cabeceras |
+| Hook local `pre-push` bloquea el push directo a `main` y `develop` (mitigación contra accidentes; ver sección 2: no es un control) | `.githooks/pre-push`, `scripts/dev.ps1 hooks` | `tests/test_infra_hardening.py` (casos del hook) |
 | PWA sin caché de datos: el service worker no intercepta `fetch` | `web/public/sw.js` | Revisión de código |
 
 ## 2. Aceptado como riesgo
@@ -46,6 +47,8 @@ desarrollo pesado posterior al 27 de noviembre de 2026).
 | CSP con `'unsafe-inline'` en `script-src` | Next.js inyecta scripts de arranque en línea | Al implementar CSP con nonce |
 | Volumen de Qdrant y `.env` sin cifrado propio | Dependen del cifrado de disco del equipo (BitLocker en la laptop, FileVault en la Mac mini) | Activarlo y confirmarlo como parte de `deploy-checklist` |
 | Tailscale (servicio de terceros) coordina la red privada | Los datos viajan cifrados extremo a extremo (WireGuard); el servicio coordina claves y dispositivos, no ve el tráfico | Si Dirección exige infraestructura 100 % propia (alternativa: Headscale) |
+| **GitHub no aplica la protección de ramas** en este repositorio privado (plan actual de la organización); la regla de `main` existe pero figura "Not enforced" | La única mitigación es el hook local `pre-push` (se puede saltar con `--no-verify`, solo existe en clones donde se active, y no impide un push hecho desde otra herramienta) y la disciplina del flujo de `CONTRIBUTING.md`. El CI corre en cada PR, pero GitHub no bloquea el merge si falla | Si la organización pasa a GitHub Team/Enterprise: la regla ya creada se activa sola, y el hook pasa a ser respaldo. No hacer público el repositorio para obtenerla |
+| El repositorio tiene un solo desarrollador | Sin revisión de pares; por eso la regla de `main` no exige aprobaciones (no podría aprobar su propio PR) | Cuando haya más colaboradores: exigir 1 aprobación y revisar `CODEOWNERS` |
 | Nombres y reparto de roles son provisionales | Hay que validarlos con Dirección | Antes de implementar el login |
 | Ollama `llama3.1:8b` como anonimizador y clasificador | Es el modelo calibrado hoy; se compensa con piso por conector y scrubber (ver sección 3) | Con cada cambio de modelo, correr el eval |
 

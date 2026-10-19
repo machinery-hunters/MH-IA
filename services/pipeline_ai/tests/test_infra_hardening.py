@@ -80,3 +80,88 @@ def test_env_example_has_no_real_looking_secrets():
             assert (
                 line.split("=", 1)[1] == ""
             ), f"valor no vacío en .env.example: {line.split('=')[0]}"
+
+
+# ── Hook local pre-push (protección de main/develop) ─────────────────────
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+
+HOOK = ROOT / ".githooks" / "pre-push"
+needs_sh = pytest.mark.skipif(shutil.which("sh") is None, reason="requiere sh")
+
+
+def _run_hook(remote_ref: str, env_extra: dict | None = None) -> subprocess.CompletedProcess:
+    import os
+
+    env = {k: v for k, v in os.environ.items() if k != "MHIA_ALLOW_PROTECTED_PUSH"}
+    env.update(env_extra or {})
+    line = f"refs/heads/work abc123 {remote_ref} def456\n"
+    return subprocess.run(
+        ["sh", str(HOOK), "origin", "https://example.invalid/repo.git"],
+        input=line,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+
+def test_pre_push_hook_file_uses_lf_line_endings():
+    assert b"\r" not in HOOK.read_bytes()
+
+
+@needs_sh
+@pytest.mark.parametrize("ref", ["refs/heads/main", "refs/heads/develop"])
+def test_pre_push_blocks_direct_push_to_protected_branches(ref):
+    result = _run_hook(ref)
+    assert result.returncode == 1
+    assert "bloqueado" in result.stderr
+
+
+@needs_sh
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "refs/heads/feature/conector-firestore",
+        "refs/heads/security/outbound-gateway",
+        "refs/heads/maintenance",  # prefijo parecido, no es main
+        "refs/tags/v0.2.0",
+    ],
+)
+def test_pre_push_allows_work_branches_and_tags(ref):
+    assert _run_hook(ref).returncode == 0
+
+
+@needs_sh
+def test_pre_push_override_requires_explicit_env_var():
+    assert _run_hook("refs/heads/main", {"MHIA_ALLOW_PROTECTED_PUSH": "1"}).returncode == 0
+    assert _run_hook("refs/heads/main", {"MHIA_ALLOW_PROTECTED_PUSH": "0"}).returncode == 1
+
+
+@needs_sh
+def test_pre_push_blocks_deleting_protected_branches():
+    result = subprocess.run(
+        ["sh", str(HOOK), "origin", "url"],
+        input="(delete) 0000000000000000000000000000000000000000 refs/heads/main def456\n",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 1
+
+
+def test_pre_push_hook_is_executable_in_git_index():
+    """En macOS/Linux git ignora un hook sin bit de ejecución (caso Mac mini).
+    Se activa con: git update-index --chmod=+x .githooks/pre-push"""
+    result = subprocess.run(
+        ["git", "ls-files", "-s", ".githooks/pre-push"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        pytest.skip("el hook aún no está en el índice de git (o no hay git)")
+    assert result.stdout.startswith(
+        "100755"
+    ), "falta: git update-index --chmod=+x .githooks/pre-push"
