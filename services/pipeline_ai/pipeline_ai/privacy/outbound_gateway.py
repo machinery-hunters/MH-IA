@@ -11,7 +11,9 @@ Qué hace, en orden:
      evidencia no se llama a Claude: cero alucinaciones).
   2. Sustituye los nombres de fuente por alias estables (Fuente_1, Fuente_2...).
      El mapa alias -> nombre real SOLO vive en local (en el payload, fuera de
-     su repr) y sirve para re-etiquetar la respuesta con `restore()`.
+     su repr) y sirve para re-etiquetar la respuesta con `restore()`. Lo mismo
+     ocurre con el mapa de marcadores ([EMPRESA_1], [MONTO_2]...) que dejó el
+     anonimizador: `restore()` devuelve el dato real en la respuesta, en local.
   3. Pasa la consulta y el contexto por el scrubber determinista. Cualquier
      hallazgo BLOQUEA el envío (falla cerrada): se lanza OutboundBlocked con los
      motivos (solo tipos, nunca valores).
@@ -39,6 +41,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from pipeline_ai.privacy.redactor import PLACEHOLDER_RE
 from pipeline_ai.privacy.scrubber import scan
 from pipeline_ai.privacy.sensitivity import Sensitivity, requires_anonymization
 from pipeline_ai.sources import Citation
@@ -70,6 +73,8 @@ class OutboundPayload:
     audit_hash: str
     # alias -> nombre real. SOLO local: nunca se envía y no aparece en repr.
     alias_map: Mapping[str, str] = field(repr=False)
+    # marcador ([EMPRESA_1], [MONTO_2]...) -> dato real. SOLO local, igual que alias_map.
+    placeholder_map: Mapping[str, str] = field(default_factory=dict, repr=False)
     _issuer: object = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -77,8 +82,10 @@ class OutboundPayload:
             raise PermissionError("OutboundPayload solo se construye con prepare_outbound().")
 
     def restore(self, text: str) -> str:
-        """Re-etiqueta los alias de fuente con el nombre real (se hace en local,
-        sobre la respuesta de Claude, antes de mostrarla al usuario)."""
+        """Devuelve los datos reales en la respuesta de Claude (se hace en local, antes de
+        mostrarla al usuario): los marcadores vuelven a ser el dato original y los alias
+        de fuente vuelven a ser el nombre real del documento. Lo desconocido se deja igual."""
+        text = PLACEHOLDER_RE.sub(lambda m: self.placeholder_map.get(m.group(0), m.group(0)), text)
         return _ALIAS_RE.sub(lambda m: self.alias_map.get(m.group(0), m.group(0)), text)
 
 
@@ -185,6 +192,7 @@ def prepare_outbound(
     anonymized: bool,
     source_aliases: Mapping[str, str] | None = None,
     known_names: Iterable[str] = (),
+    placeholder_map: Mapping[str, str] | None = None,
     session_id: str = "",
 ) -> OutboundPayload:
     """Verifica, aliasa y audita. Lanza OutboundBlocked si algo no se puede enviar.
@@ -246,5 +254,6 @@ def prepare_outbound(
         sensitivity=sensitivity,
         audit_hash=digest,
         alias_map=dict(alias_to_real),
+        placeholder_map=dict(placeholder_map or {}),
         _issuer=_ISSUER,
     )

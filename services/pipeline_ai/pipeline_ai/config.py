@@ -34,6 +34,19 @@ class Settings:
     qdrant_collection: str = os.getenv("QDRANT_COLLECTION", "mhia_drive_docs")
     retrieval_score_threshold: float = float(os.getenv("RETRIEVAL_SCORE_THRESHOLD", "0.5"))
 
+    # ── Anonimizador local ───────────────────────────────────────────────
+    # Tope de tiempo (s) por llamada al LLM local que detecta nombres propios. Si se excede,
+    # la anonimización falla cerrada: no se envía nada a Claude.
+    anonymizer_timeout_s: float = float(os.getenv("ANONYMIZER_TIMEOUT_S", "45"))
+    anonymizer_num_ctx: int = int(os.getenv("ANONYMIZER_NUM_CTX", "4096"))
+    # Términos que NO se redactan aunque el LLM los marque como nombres: la propia empresa y
+    # marcas públicas de maquinaria (no identifican a un cliente y los necesita el razonamiento).
+    anonymizer_keep_terms: tuple[str, ...] = _env_list(
+        "ANONYMIZER_KEEP_TERMS",
+        "Machinery Hunters,MH,Caterpillar,CAT,John Deere,Komatsu,Bobcat,Dynapac,Volvo,Hitachi,"
+        "Liebherr,JCB,Doosan,Kubota,Terex,Sany,XCMG,Case,Hyundai",
+    )
+
     # ── Conectores (cada uno se valida en el punto de uso, nunca al importar) ──
     # ERP (Frappe/ERPNext) — pendiente del proveedor externo
     erpnext_base_url: str = os.getenv("ERPNEXT_BASE_URL", "")

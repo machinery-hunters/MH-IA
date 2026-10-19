@@ -8,9 +8,10 @@ Diseño clave para las reglas críticas:
   el guardrail de "cero alucinaciones" aborta el flujo antes de llegar a
   cualquier nodo generador de respuesta.
 - `anonymized_query` + `anonymized_context`: salida del anonimizador local.
-  Se anonimizan JUNTOS para que los placeholders (Cliente_A...) sean
-  consistentes entre la consulta y el contexto. `anonymized` es True solo si
-  el anonimizador corrió y devolvió una salida válida.
+  Se anonimizan JUNTOS (una sola `Redaction`) para que los marcadores
+  ([EMPRESA_1], [MONTO_1]...) sean consistentes entre la consulta y el contexto.
+  `anonymized` es True solo si el anonimizador corrió y devolvió una salida válida.
+  `placeholder_map` y `known_names` son SOLO locales (restaurar y verificar).
 - `outbound`: lo ÚNICO que el nodo Claude puede leer. Lo produce el outbound
   gateway (privacy/outbound_gateway.py); sin él, Claude no se invoca.
   `query`, `raw_context`, `citations` y `source_aliases` NUNCA cruzan esa frontera.
@@ -63,6 +64,12 @@ class MHIAState(TypedDict, total=False):
     anonymized_query: str  # consulta tras el anonimizador local
     anonymized_context: str  # contexto tras el anonimizador local
     anonymized: bool  # True solo si el anonimizador local corrió con éxito
+    # marcador ([EMPRESA_1], [MONTO_2]...) -> dato real. SOLO local; sirve para restaurar la
+    # respuesta de Claude. Nunca se envía.
+    placeholder_map: dict[str, str]
+    # Variantes (texto) de los nombres propios detectados; el gateway verifica que ninguna
+    # quede en lo que se envía. SOLO local.
+    known_names: list[str]
     # Resultado del outbound gateway. Ausente = envío bloqueado (Claude no se invoca).
     outbound: OutboundPayload | None
 

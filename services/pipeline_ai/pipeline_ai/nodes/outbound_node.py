@@ -49,6 +49,8 @@ async def outbound_gateway_node(state: MHIAState) -> dict:
             sensitivity=sensitivity_for_state(state),
             anonymized=state.get("anonymized", False),
             source_aliases=state.get("source_aliases"),
+            known_names=state.get("known_names", ()),
+            placeholder_map=state.get("placeholder_map"),
             session_id=state.get("session_id", ""),
         )
     except OutboundBlocked as blocked:

@@ -1,16 +1,19 @@
 """
-scrubber - capa DETERMINISTA de verificación previa al envío a Claude.
+scrubber - capa DETERMINISTA de detección de datos sensibles.
 
-Corre DESPUÉS del anonimizador LLM (Ollama, 8B), que es probabilístico y puede
-dejar pasar un dato. Esta capa no depende de ningún modelo: su cobertura es
-auditable y testeable.
+Se usa en dos sitios, con los MISMOS detectores (así lo que se redacta y lo que
+se verifica no pueden divergir):
+
+  - privacy/redactor.py los usa para REDACTAR (reemplazar por marcadores) antes
+    de que el texto salga del anonimizador local.
+  - privacy/outbound_gateway.py los usa para VERIFICAR, justo antes de Claude.
+    Cualquier hallazgo ahí BLOQUEA el envío (falla cerrada): el scrubber no
+    "limpia" en silencio, porque eso ocultaría que el redactor falló.
 
 Contrato:
-    scan(text, known_names=()) -> ScrubReport
-
-El scrubber NO "limpia": solo DETECTA. Si queda algún hallazgo, el outbound
-gateway BLOQUEA el envío (falla cerrada). Limpiar en silencio ocultaría que el
-anonimizador falló y dejaría pasar lo que la regex no vea.
+    scan(text, known_names=())        -> ScrubReport   (solo tipo y conteo)
+    find_spans(normalized, names)     -> list[Span]    (posiciones, para redactar)
+    normalize_with_map(text)          -> (normalizado, inicio_orig, fin_orig)
 
 Qué detecta (kind en el reporte):
     credencial        claves de API, llaves privadas, tokens JWT
@@ -68,12 +71,59 @@ class ScrubReport:
         return tuple(f.kind for f in self.findings)
 
 
+@dataclass(frozen=True)
+class Span:
+    """Un hallazgo: tipo y posición [start, end) dentro del texto NORMALIZADO."""
+
+    kind: str
+    start: int
+    end: int
+
+
 def normalize_for_scan(text: str) -> str:
     """Forma canónica para buscar: NFKD, sin acentos ni caracteres invisibles,
     minúsculas y espacios colapsados."""
     decomposed = unicodedata.normalize("NFKD", text.replace(_MASK, " "))
     kept = "".join(ch for ch in decomposed if unicodedata.category(ch) not in {"Cf", "Mn"})
     return " ".join(kept.casefold().split())
+
+
+def normalize_with_map(text: str) -> tuple[str, list[int], list[int]]:
+    """Igual que `normalize_for_scan`, pero además devuelve, por cada carácter del
+    texto normalizado, dónde empieza y dónde termina en el texto ORIGINAL.
+
+    Sirve para redactar sobre el original: un hallazgo [a, b) en el normalizado
+    corresponde a original[starts[a] : ends[b - 1]]. El texto normalizado es
+    idéntico al de `normalize_for_scan` (hay un test que lo comprueba).
+    """
+    source = text.replace(_MASK, " ")
+    out: list[str] = []
+    starts: list[int] = []
+    ends: list[int] = []
+    pending_space = False
+    space_start = 0
+    space_end = 0
+
+    for index, char in enumerate(source):
+        decomposed = unicodedata.normalize("NFKD", char)
+        kept = "".join(c for c in decomposed if unicodedata.category(c) not in {"Cf", "Mn"})
+        for piece in kept.casefold():
+            if piece.isspace():
+                if not pending_space:
+                    pending_space = True
+                    space_start = index
+                space_end = index + 1
+                continue
+            if pending_space:
+                if out:  # sin espacio inicial
+                    out.append(" ")
+                    starts.append(space_start)
+                    ends.append(space_end)
+                pending_space = False
+            out.append(piece)
+            starts.append(index)
+            ends.append(index + 1)
+    return "".join(out), starts, ends
 
 
 # ── Patrones (se aplican sobre texto ya normalizado: minúsculas, sin acentos) ──
@@ -154,10 +204,11 @@ def _fixed(kind: str) -> Callable[[str], str | None]:
     return lambda _text: kind
 
 
-def scan(text: str, known_names: Iterable[str] = ()) -> ScrubReport:
-    """Busca datos sensibles en `text`. Devuelve solo tipo y conteo (nunca valores)."""
-    working = normalize_for_scan(text)
-    counts: dict[str, int] = {}
+def find_spans(normalized: str, known_names: Iterable[str] = ()) -> list[Span]:
+    """Detecta datos sensibles en un texto YA normalizado (`normalize_for_scan` o
+    `normalize_with_map`). Devuelve los hallazgos ordenados por posición."""
+    working = normalized
+    spans: list[Span] = []
 
     def consume(pattern: re.Pattern[str], classify: Callable[[str], str | None]) -> None:
         nonlocal working
@@ -166,7 +217,7 @@ def scan(text: str, known_names: Iterable[str] = ()) -> ScrubReport:
             kind = classify(match.group(0))
             if kind is None:
                 return match.group(0)
-            counts[kind] = counts.get(kind, 0) + 1
+            spans.append(Span(kind, match.start(), match.end()))
             return _MASK * len(match.group(0))
 
         working = pattern.sub(replace, working)
@@ -190,4 +241,12 @@ def scan(text: str, known_names: Iterable[str] = ()) -> ScrubReport:
         )
         consume(pattern, _fixed("nombre_conocido"))
 
+    return sorted(spans, key=lambda span: span.start)
+
+
+def scan(text: str, known_names: Iterable[str] = ()) -> ScrubReport:
+    """Busca datos sensibles en `text`. Devuelve solo tipo y conteo (nunca valores)."""
+    counts: dict[str, int] = {}
+    for span in find_spans(normalize_for_scan(text), known_names):
+        counts[span.kind] = counts.get(span.kind, 0) + 1
     return ScrubReport(tuple(Finding(kind, n) for kind, n in sorted(counts.items())))
