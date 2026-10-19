@@ -1,3 +1,6 @@
+import pytest
+from cryptography.fernet import Fernet
+
 from pipeline_ai.config import settings
 
 
@@ -39,6 +42,8 @@ def _prod(monkeypatch, **overrides):
     monkeypatch.setattr(settings, "debug", False)
     monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-fake")
     monkeypatch.setattr(settings, "api_session_secret", "x" * 32)
+    monkeypatch.setattr(settings, "api_totp_key", Fernet.generate_key().decode())
+    monkeypatch.setattr(settings, "cookie_secure", True)
     for k, v in overrides.items():
         monkeypatch.setattr(settings, k, v)
 
@@ -73,6 +78,25 @@ def test_production_guard_rejects_debug(monkeypatch):
 
     _prod(monkeypatch, debug=True)
     with pytest.raises(RuntimeError, match="DEBUG"):
+        settings.require_production_secrets()
+
+
+def test_production_guard_fails_without_totp_key(monkeypatch):
+    _prod(monkeypatch, api_totp_key="")
+    with pytest.raises(RuntimeError, match="api_totp_key"):
+        settings.require_production_secrets()
+
+
+def test_production_guard_rejects_an_invalid_totp_key_without_echoing_it(monkeypatch):
+    _prod(monkeypatch, api_totp_key="no-es-una-clave-fernet")
+    with pytest.raises(RuntimeError, match="Fernet") as excinfo:
+        settings.require_production_secrets()
+    assert "no-es-una-clave-fernet" not in str(excinfo.value)
+
+
+def test_production_guard_requires_secure_cookies(monkeypatch):
+    _prod(monkeypatch, cookie_secure=False)
+    with pytest.raises(RuntimeError, match="COOKIE_SECURE"):
         settings.require_production_secrets()
 
 

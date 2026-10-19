@@ -1,8 +1,9 @@
 """
 API de MH IA (FastAPI). Es la frontera entre la GUI (Next.js) y el pipeline.
 
-Esqueleto: /health real, /api/v1/me y /api/v1/connectors con RBAC real, y
-/api/v1/query como 501 hasta que se construya el flujo multi-agente.
+/health, login/logout con sesión por cookie (api/auth_routes.py), /api/v1/me y
+/api/v1/connectors con RBAC real, y /api/v1/query como 501 hasta que se construya el flujo
+multi-agente.
 La GUI nunca importa el pipeline: solo habla con esta API.
 """
 
@@ -11,11 +12,14 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from pipeline_ai.api.auth_routes import router as auth_router
 from pipeline_ai.api.deps import require_permission
+from pipeline_ai.api.origin import request_origin_ok
 from pipeline_ai.config import settings
 from pipeline_ai.connectors.registry import get_connectors
 from pipeline_ai.security.roles import Permission, Principal
@@ -46,9 +50,27 @@ def create_app(allowed_hosts: Sequence[str] | None = None) -> FastAPI:
         redoc_url=None,
         openapi_url="/openapi.json" if settings.debug else None,
     )
-    app.add_middleware(
-        TrustedHostMiddleware, allowed_hosts=list(allowed_hosts or settings.api_allowed_hosts)
-    )
+    hosts = list(allowed_hosts or settings.api_allowed_hosts)
+
+    @app.middleware("http")
+    async def csrf_and_cache_headers(request: Request, call_next) -> Response:
+        # CSRF (2ª capa tras SameSite=Strict): el Origin de un POST debe ser un host nuestro.
+        if not request_origin_ok(
+            request.method,
+            request.headers.get("origin"),
+            request.headers.get("sec-fetch-site"),
+            hosts,
+        ):
+            return JSONResponse({"detail": "Origen no permitido."}, status_code=403)
+        response = await call_next(request)
+        # Nada de la API (sesión, datos, errores) debe quedar en cachés del navegador o proxies.
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
+    # TrustedHost se añade DESPUÉS: queda como capa más externa y rechaza antes cualquier Host raro.
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
+    app.include_router(auth_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -62,6 +84,7 @@ def create_app(allowed_hosts: Sequence[str] | None = None) -> FastAPI:
         # La GUI construye su navegación a partir de esto; no hardcodea roles.
         return {
             "user_id": principal.user_id,
+            "username": principal.username,
             "role": principal.role.value,
             "permissions": sorted(p.value for p in principal.permissions),
         }

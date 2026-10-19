@@ -1,0 +1,16 @@
+# Configuracion de gitleaks (CI: job secrets-scan). Se suman las reglas por defecto.
+title = "MH IA"
+
+[extend]
+useDefault = true
+
+# Falsos positivos conocidos: contrasenas y tokens FICTICIOS de los tests de autenticacion.
+# Es una lista deliberadamente estrecha: una sola regla y solo estos archivos. No agregar
+# directorios completos ni la regla entera; cualquier otro hallazgo debe seguir fallando.
+[[allowlists]]
+description = "Contrasenas y tokens ficticios en los tests de autenticacion"
+targetRules = ["generic-api-key"]
+paths = [
+  '''services/pipeline_ai/tests/test_auth_cli\.py''',
+  '''services/pipeline_ai/tests/test_auth_service\.py''',
+]

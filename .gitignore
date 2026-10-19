@@ -37,3 +37,6 @@ services/pipeline_ai/lab/results/
 
 # Preferencias locales de Claude Code (plugins activos por usuario)
 .claude/settings.local.json
+data/*.db
+data/*.db-wal
+data/*.db-shm

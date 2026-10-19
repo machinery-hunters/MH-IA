@@ -7,7 +7,7 @@ o permisos actualiza este archivo en el mismo commit. Tres secciones:
 (sabemos que falta; no se afirma lo contrario).
 
 Última revisión: 19 de octubre de 2026 (outbound gateway y scrubber determinista, preparación del entorno y protección
-local de ramas; primer paso de la Fase 1 del plan).
+local de ramas; primer paso de la Fase 1 del plan; login, sesiones y segundo factor).
 
 ---
 
@@ -17,7 +17,7 @@ local de ramas; primer paso de la Fase 1 del plan).
 |---|---|---|
 | Secretos fuera de git (`.env`, `credentials/*.json`, `*.pem`, `*.key`) | `.gitignore` | `tests/test_infra_hardening.py`; job `secrets-scan` (gitleaks) en CI; `scripts/dev.ps1 doctor` |
 | `.env.example` solo con valores vacíos o placeholders | `.env.example` | `test_env_example_has_no_real_looking_secrets` |
-| Fallo explícito si falta un secreto crítico en producción | `Settings.require_production_secrets()`, llamado al arrancar la API | `tests/test_config.py` (6 casos) |
+| Fallo explícito si falta un secreto crítico en producción | `Settings.require_production_secrets()`, llamado al arrancar la API | `tests/test_config.py` |
 | `DEBUG` apagado por defecto; `/docs` y `/openapi.json` desactivados salvo debug | `config.py`, `api/main.py` | `test_debug_is_off_by_default`, `test_docs_are_disabled_unless_debug` |
 | Credenciales con carga perezosa (nada se valida ni conecta al importar) | patrón `@lru_cache` + `settings.require()` | `test_lazy_clients_validate_at_use_not_at_import` |
 | Qdrant y Ollama **no publican puertos** al host ni a la LAN | `docker-compose*.yml` | `test_qdrant_and_ollama_never_publish_ports` |
@@ -36,6 +36,15 @@ local de ramas; primer paso de la Fase 1 del plan).
 | Auditoría de cada envío y de cada bloqueo: hash SHA-256, tamaños, nivel y motivos; nunca contenido | `privacy/outbound_gateway.py` (logger `mhia.audit`) | `test_audit_log_has_hash_and_sizes_but_never_content`, `test_blocked_attempts_are_audited_without_content` |
 | La sensibilidad RESTRICTED nunca sale hacia Claude | `privacy/outbound_gateway.py` | `test_restricted_never_leaves_even_if_anonymized` |
 | RBAC en servidor con **denegación por defecto**; rol desconocido = sin permisos | `security/roles.py`, `api/deps.py` | `tests/test_security_roles.py`, `tests/test_api.py` |
+| **Login con sesiones en servidor.** Token opaco de 256 bits; en la base solo se guarda su HMAC-SHA256 (con `API_SESSION_SECRET`), así que una copia de `auth.db` no sirve para suplantar sesiones. Cookie `HttpOnly`, `SameSite=Strict`, `Path=/` (en producción `__Host-` + `Secure`). Caducan a los 30 min de inactividad y a las 12 h absolutas. El rol se lee de la base en **cada** petición: desactivar a un usuario o cambiarle el rol surte efecto de inmediato. Sin sesión válida, 401 | `security/auth.py`, `security/auth_store.py`, `api/auth_routes.py`, `api/deps.py` | `tests/test_auth_service.py`, `tests/test_auth_store.py`, `tests/test_auth_api.py` |
+| Contraseñas con **argon2id**, mínimo 12 y máximo 256 caracteres, lista de contraseñas obvias vetadas, rehash automático al subir los parámetros | `security/passwords.py` | `tests/test_auth_passwords.py` |
+| **Sin enumeración de usuarios:** usuario inexistente, contraseña mala, cuenta desactivada y bloqueo responden el mismo mensaje genérico; para usuarios inexistentes se hace una verificación ficticia para igualar el tiempo | `security/auth.py` | `tests/test_auth_service.py`, `tests/test_auth_api.py` |
+| **Freno a la fuerza bruta:** 5 fallos bloquean la cuenta 15 min (con retroceso exponencial hasta ×8, los fallos antiguos se olvidan); también para usuarios que no existen (la clave es el hash del nombre normalizado); mientras está bloqueada no se procesa ninguna contraseña; responde 429 con `Retry-After` | `security/auth.py`, `security/auth_store.py` | `tests/test_auth_service.py`, `tests/test_auth_store.py`; verificado con el servicio real |
+| **Segundo factor TOTP** (RFC 6238, ±1 ventana) con protección contra reutilización del código (consumo atómico); el secreto se guarda cifrado con Fernet (`API_TOTP_KEY`). `control_total` **siempre** exige código y no puede iniciar sesión sin haberlo enrolado (403 `mfa_not_enrolled`); cualquier usuario con TOTP activo debe usarlo | `security/totp.py`, `security/secretbox.py`, `security/auth.py` | `tests/test_auth_totp.py` (vectores del RFC), `tests/test_auth_service.py`, `tests/test_auth_cli.py`; verificado con el servicio real |
+| **Sin registro público.** Los usuarios se crean y administran solo con la CLI `python -m pipeline_ai.security.manage` (contraseñas únicamente por `getpass`, nunca por argumento ni en el historial del shell); el enrolamiento TOTP guarda el secreto solo después de confirmar un código válido | `security/manage.py` | `tests/test_auth_cli.py` |
+| **CSRF en dos capas:** cookie `SameSite=Strict` y verificación de `Origin`/`Sec-Fetch-Site` en todo método no seguro; respuestas de `/api/` con `Cache-Control: no-store` | `api/origin.py`, `api/main.py` | `tests/test_auth_api.py` |
+| La base de usuarios **falla cerrada**: si `auth.db` no está disponible la API responde 503, nunca deja pasar. Producción exige además `API_TOTP_KEY` (Fernet válida) y cookies `Secure`; `auth.db` se crea con permisos 0600 y no se versiona | `api/deps.py`, `config.py`, `.gitignore` | `tests/test_auth_api.py`, `tests/test_config.py` |
+| Auditoría de autenticación (logger `mhia.auth`): login correcto, fallos, bloqueos y logout; nunca contraseñas, códigos ni tokens, y el nombre de usuario de un intento fallido va hasheado | `security/auth.py` | `tests/test_auth_service.py` |
 | Respuesta de conectores sin valores de credenciales | `api/main.py` | `test_connectors_endpoint_lists_status_without_secrets` |
 | Validación de entrada en servidor (longitud de la consulta) | `api/main.py` (`QueryRequest`) | `test_query_validates_input_server_side` |
 | Lista blanca de cabecera `Host` | `TrustedHostMiddleware` | `test_untrusted_host_header_is_rejected` |
@@ -55,30 +64,34 @@ local de ramas; primer paso de la Fase 1 del plan).
 | Tailscale (servicio de terceros) coordina la red privada | Los datos viajan cifrados extremo a extremo (WireGuard); el servicio coordina claves y dispositivos, no ve el tráfico | Si Dirección exige infraestructura 100 % propia (alternativa: Headscale) |
 | **GitHub no aplica la protección de ramas** en este repositorio privado (plan actual de la organización); la regla de `main` existe pero figura "Not enforced" | La única mitigación es el hook local `pre-push` (se puede saltar con `--no-verify`, solo existe en clones donde se active, y no impide un push hecho desde otra herramienta) y la disciplina del flujo de `CONTRIBUTING.md`. El CI corre en cada PR, pero GitHub no bloquea el merge si falla | Si la organización pasa a GitHub Team/Enterprise: la regla ya creada se activa sola, y el hook pasa a ser respaldo. No hacer público el repositorio para obtenerla |
 | El repositorio tiene un solo desarrollador | Sin revisión de pares; por eso la regla de `main` no exige aprobaciones (no podría aprobar su propio PR) | Cuando haya más colaboradores: exigir 1 aprobación y revisar `CODEOWNERS` |
-| Nombres y reparto de roles son provisionales | Hay que validarlos con Dirección | Antes de implementar el login |
+| Nombres y reparto de roles son provisionales | Hay que validarlos con Dirección | Antes de crear los usuarios reales |
 | Ollama `llama3.1:8b` como anonimizador y clasificador | Es el modelo que usamos hoy; ya solo detecta nombres (no reescribe texto) y se compensa con piso por conector y con el scrubber determinista (sección 1) | Con cada cambio de modelo, correr el eval |
 | El scrubber es una red de seguridad, no una prueba de limpieza | No detecta cantidades escritas en palabras ("un millón doscientos mil"), homoglifos (letras cirílicas que imitan latinas) ni nombres de personas o empresas fuera de la lista de fuentes conocidas; para eso depende del modelo local. Es conservador: puede **bloquear de más** (p. ej. un número de 7 o más dígitos que sea un folio legítimo) y el usuario recibe un mensaje genérico | En el primer eval con consultas reales; al llegar cada conector, pasar a `known_names` los nombres de sus clientes y proveedores |
 | El hash de auditoría es SHA-256 simple, no HMAC | Sirve para correlacionar y probar integridad; no oculta consultas muy cortas frente a quien ya tenga el log | Al implementar el almacén de auditoría (HMAC con clave dedicada) |
 | Las respuestas de Claude no pasan por el scrubber | Solo se re-etiquetan alias en local y se muestran a un usuario autenticado; no vuelven a salir de la red | Si la respuesta se reenvía a otro sistema o canal |
 | El candado del constructor de `OutboundPayload` evita errores de código, no a quien tenga acceso al proceso | Es defensa contra accidentes; el control real es que el payload solo sale de `prepare_outbound` y que las pruebas fijan que solo `claude_node` importa el SDK | Si se añade otro nodo que hable con un modelo externo |
+| **El freno a la fuerza bruta es por usuario, no por IP** | La API queda detrás del proxy de Next.js, así que la IP del cliente no es confiable. Consecuencia: alguien con acceso al tailnet puede bloquear temporalmente (15 min) la cuenta de otro; se acepta frente a permitir adivinar contraseñas | Si se expone fuera del tailnet o se configura un proxy con cabeceras `X-Forwarded-For` confiables (añadir límite por IP) |
+| **TOTP es phishable** y su secreto vive en el servidor | Está cifrado con `API_TOTP_KEY`, pero quien tenga a la vez `.env` y `auth.db` podría generar códigos. SHA-1 es lo que soportan todas las apps autenticadoras | Fase 5: passkeys (WebAuthn) para `control_total` |
+| `auth.db` no tiene cifrado propio (salvo los secretos TOTP) | Contiene hashes argon2id y HMACs de sesión, no datos de negocio; depende del cifrado de disco del equipo | Junto con el cifrado de disco de `deploy-checklist` |
+| Administración de usuarios solo por CLI; **sin cambio de contraseña ni recuperación de TOTP desde la API** | Con pocos usuarios y un solo administrador evita una superficie de ataque más; un reinicio se hace con `reset-password` / `enroll-totp` | Cuando haya pantalla de administración o más de ~10 usuarios |
 
 ## 3. Explícitamente no resuelto
 
-Cosas que sabemos que faltan. Hasta que cada una se cierre, **la API rechaza
-todo** (`get_current_principal` devuelve 401) y el pipeline **no está expuesto
+Cosas que sabemos que faltan. Hasta que cada una se cierre, **la API exige
+sesión válida y permiso** (sin sesión, `get_current_principal` devuelve 401) y el pipeline **no está expuesto
 por la API**: `POST /api/v1/query` responde 501.
 
-1. **Autenticación inexistente.** Falta login, sesiones (cookie `httpOnly` firmada con `API_SESSION_SECRET`), hash argon2, protección contra fuerza bruta y el segundo factor del rol `control_total`.
+1. **Autenticación: pendientes tras el login.** El login con sesiones, argon2id, freno a la fuerza bruta y TOTP ya están implementados (sección 1). Faltan: pantalla de login en la GUI, cambio de contraseña desde la API, passkeys (WebAuthn) y un almacén de auditoría de autenticación (hoy solo el logger `mhia.auth`).
 2. **Logs locales con la consulta cruda.** `retriever_node` registra la consulta del usuario y los nombres de las fuentes recuperadas en el log INFO. No sale de la red, pero cualquiera con acceso a los logs la vería. Pendiente: registrar solo hash y longitud.
 3. **Nombres no detectados por el modelo local.** Un nombre de persona o empresa no tiene forma reconocible, así que si llama3.1:8b no lo detecta, el scrubber no lo atrapa y viaja a Claude. Un documento malicioso también podría intentar que el extractor devuelva listas vacías (el prompt lo prohíbe y trata el texto como datos, pero no es una garantía). Medido en el laboratorio sintético (19 oct 2026, 14 preguntas con datos inventados): 0 fugas de canarios, 14/14 respondidas, sin cuelgues. Mitigación pendiente: extraer entidades al ingestar y guardarlas como metadatos / lista de contrapartes conocidas, que el scrubber verifique siempre. Además, el redactor puede sobre-redactar (p. ej. "6,800 horas" como monto); es seguro, solo resta precisión.
 4. **Sin filtrado por rol a nivel de documento en Qdrant.** Falta indexar `sensitivity` y `allowed_roles` en el payload y filtrar en cada consulta. Un filtro de payload tampoco basta por sí solo: el control real vive también en la API.
-5. **Auditoría incompleta.** Se registra cada envío a Claude (hash, nivel, motivos) en el logger `mhia.audit`, pero no *quién* consultó qué (depende del login), no hay almacén propio y el registro no está protegido contra alteración.
-6. **Sin rate limiting** en la API.
+5. **Auditoría incompleta.** Se registra cada envío a Claude (hash, nivel, motivos) en el logger `mhia.audit`, pero no *quién* consultó qué en cada envío (el login ya identifica al usuario; falta cablear `POST /api/v1/query` y pasar el usuario al gateway), no hay almacén propio y el registro no está protegido contra alteración.
+6. **Sin rate limiting general** en la API (solo el login tiene freno a la fuerza bruta, por usuario; ver sección 2).
 7. **Inyección de instrucciones vía documentos.** Un documento de Drive o un registro del CRM puede contener texto que intente instruir al modelo. Mitigación prevista: el nodo Claude no tiene herramientas ni acciones (solo produce texto), el contexto va delimitado y la respuesta exige citas; falta una prueba adversarial.
 8. **Eval del router al 89 %** con 3 fallas conocidas sin resolver; ahora, además, el piso por conector cubre ERP/CRM/Firestore, pero Drive sigue dependiendo del router y del mapeo de carpetas.
 9. **Listas blancas de campos** de ERP, CRM y Firestore por construir (llegan con cada conector).
 10. **La recuperación no distingue bien lo irrelevante.** Medido con `lab/calibrar_umbral.py` y 31 preguntas (`lab/retrieval_golden.json`): con nomic-embed-text ningún umbral absoluto separa relevante de irrelevante (negativos hasta 0.71, positivos desde 0.57), y en 4 de 19 preguntas el documento correcto no queda primero. Mitigación aplicada: piso 0.60 y corte relativo `RETRIEVAL_SCORE_MARGIN=0.06`, que mantiene la misma recuperación (16/19) y baja de ~4 a ~1.6 los fragmentos irrelevantes que viajan a Claude. Persiste: con scores planos (pregunta sin respuesta en los documentos) siguen viajando hasta 5 fragmentos, anonimizados; Claude responde que no tiene información (q10), pero la minimización no es total. Pendiente: búsqueda híbrida (denso + palabras clave) o reranking. **Backups y restauración** de Qdrant y del manifest, **rotación de secretos**, **escaneo de dependencias e imágenes** (Dependabot/Trivy): sin implementar.
-11. **Sin CSP con nonce** ni protección CSRF explícita (la cookie de sesión será `SameSite=Strict`; se verificará al implementar el login).
+11. **Sin CSP con nonce.** La protección CSRF ya existe (cookie `SameSite=Strict` más verificación de `Origin`/`Sec-Fetch-Site`; sección 1).
 
 ---
 
@@ -116,4 +129,4 @@ La API es la única fuente de verdad. La GUI pide sus permisos a `GET /api/v1/me
 | Passkeys (WebAuthn) | Resistente a phishing; da biometría del dispositivo **sin app nativa** (el PWA corre sobre HTTPS del tailnet) | Más trabajo de implementación; recuperación si se pierde el dispositivo |
 | App nativa con biometría | — | Duplica código y distribución; no aporta sobre passkeys |
 
-**Plan:** TOTP primero (cierra el hueco rápido), passkeys como segundo paso; no se construye capa nativa. Mientras no exista 2FA, el rol `control_total` no se habilita.
+**Plan:** TOTP primero (cierra el hueco rápido), passkeys como segundo paso; no se construye capa nativa. **Estado:** TOTP implementado. `control_total` exige código en cada login y no puede iniciar sesión sin haberlo enrolado (`mfa_not_enrolled`). Passkeys siguen pendientes (Fase 5).

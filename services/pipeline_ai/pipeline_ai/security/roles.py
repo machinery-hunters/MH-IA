@@ -50,6 +50,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
 class Principal:
     user_id: str
     role: Role
+    username: str = ""
 
     @property
     def permissions(self) -> frozenset[Permission]:

@@ -64,13 +64,37 @@ ollama pull llama3.1:8b
 ollama pull nomic-embed-text
 
 git clone <URL_DEL_REPO> mh-ia && cd mh-ia
-cp .env.example .env                # completar; MHIA_ENV=production, API_SESSION_SECRET (>= 32)
+cp .env.example .env                # completar; MHIA_ENV=production, API_SESSION_SECRET (>= 32), API_TOTP_KEY
 docker compose -f docker-compose.yml -f docker-compose.mac.yml up -d --build
 ```
 
 En producción `MHIA_ENV=production`: la API **se niega a arrancar** si falta
-`ANTHROPIC_API_KEY` o `API_SESSION_SECRET`, si este mide menos de 32
-caracteres o si `MHIA_DEBUG=true`.
+`ANTHROPIC_API_KEY`, `API_SESSION_SECRET` o `API_TOTP_KEY`, si el secreto de
+sesión mide menos de 32 caracteres, si `API_TOTP_KEY` no es una clave Fernet
+válida, si las cookies no son `Secure` o si `MHIA_DEBUG=true`.
+
+### Usuarios (no hay registro público)
+
+La clave TOTP se genera una vez y se guarda en `.env` (no se versiona):
+
+```bash
+docker compose run --rm mhia-api python -m pipeline_ai.security.manage gen-key
+```
+
+Los usuarios se crean con la CLI dentro del contenedor (la contraseña se pide
+por teclado, nunca como argumento). `control_total` exige enrolar TOTP antes de
+poder iniciar sesión:
+
+```bash
+docker compose run --rm mhia-api python -m pipeline_ai.security.manage create-user --username <usuario> --role control_total
+docker compose run --rm mhia-api python -m pipeline_ai.security.manage enroll-totp --username <usuario>
+docker compose run --rm mhia-api python -m pipeline_ai.security.manage list-users
+```
+
+Otros comandos: `reset-password`, `set-role`, `disable-user`, `enable-user`,
+`unlock`, `revoke-sessions`. La base (`data/auth.db`) vive en el volumen
+`./data`; respáldala junto con `.env` (sin la clave TOTP los secretos
+enrolados no se pueden descifrar).
 
 ---
 
