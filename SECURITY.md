@@ -6,8 +6,8 @@ o permisos actualiza este archivo en el mismo commit. Tres secciones:
 (decisión consciente, con su motivo) y **explícitamente no resuelto**
 (sabemos que falta; no se afirma lo contrario).
 
-Última revisión: 19 de octubre de 2026 (preparación del entorno y protección
-local de ramas, antes del desarrollo pesado posterior al 27 de noviembre de 2026).
+Última revisión: 19 de octubre de 2026 (outbound gateway y scrubber determinista, preparación del entorno y protección
+local de ramas; primer paso de la Fase 1 del plan).
 
 ---
 
@@ -29,6 +29,12 @@ local de ramas, antes del desarrollo pesado posterior al 27 de noviembre de 2026
 | Cero alucinaciones: sin evidencia, el flujo aborta sin llamar a Claude | `nodes/guardrail_node.py`, `agents/supervisor.should_abort` | `test_guardrail.py`, `test_graph_structure.py`, `test_subagent_isolation.py` |
 | Sub-agentes aislados: timeout, excepción o falta de credenciales no tumban la petición | `agents/subagent.py` | `tests/test_subagent_isolation.py` |
 | Anonimización **falla cerrada**: si no se pudo anonimizar, nunca se devuelve el dato crudo; los errores no filtran contenido de registros | `agents/subagent.py` | `test_anonymizer_failure_fails_closed_never_returns_raw`, `test_exception_does_not_escape_and_does_not_leak_message` |
+| **Outbound gateway: única puerta hacia Claude.** Claude solo recibe el `OutboundPayload` aprobado (consulta y contexto ya anonimizados y verificados); nunca la consulta cruda, el contexto crudo ni los nombres de archivo | `privacy/outbound_gateway.py`, `nodes/outbound_node.py`, `nodes/claude_node.py`, `graph.py` | `tests/test_graph_privacy_e2e.py` (corre el grafo real con modelos falsos y comprueba lo que ve Claude); `tests/test_claude_isolation.py` (solo `claude_node` importa el SDK de Anthropic y la única arista hacia Claude sale del gateway) |
+| Nombres de fuente sustituidos por alias (`Fuente_1`…): el mapa vive solo en local y la respuesta se re-etiqueta al volver. Si el nombre real reaparece en el texto se sustituye; si reaparece con otra ortografía, se bloquea | `nodes/retriever_node.py`, `privacy/outbound_gateway.py` | `tests/test_outbound_gateway.py`, `test_confidential_query_reaches_claude_only_anonymized_and_aliased` |
+| Scrubber determinista tras el anonimizador: RFC, CURP, correos, teléfonos, CLABE, tarjetas (Luhn), montos, credenciales y nombres conocidos, con normalización contra evasiones simples. **Cualquier hallazgo bloquea el envío** (falla cerrada); el reporte lleva solo tipo y conteo, nunca el valor | `privacy/scrubber.py` | `tests/test_scrubber.py`, `test_a_leak_in_the_anonymizer_output_blocks_the_send` |
+| Consulta y contexto se anonimizan juntos (placeholders consistentes). Si el modelo local falla, devuelve un formato inválido o la entrada trae las cabeceras reservadas, el envío se bloquea y el error no filtra contenido | `nodes/ollama_node.py` | `test_a_malformed_anonymizer_output_blocks_the_send`, `test_a_failing_local_model_blocks_the_send_without_leaking_its_message`, `test_reserved_markers_in_the_query_never_reach_the_local_model` |
+| Auditoría de cada envío y de cada bloqueo: hash SHA-256, tamaños, nivel y motivos; nunca contenido | `privacy/outbound_gateway.py` (logger `mhia.audit`) | `test_audit_log_has_hash_and_sizes_but_never_content`, `test_blocked_attempts_are_audited_without_content` |
+| La sensibilidad RESTRICTED nunca sale hacia Claude | `privacy/outbound_gateway.py` | `test_restricted_never_leaves_even_if_anonymized` |
 | RBAC en servidor con **denegación por defecto**; rol desconocido = sin permisos | `security/roles.py`, `api/deps.py` | `tests/test_security_roles.py`, `tests/test_api.py` |
 | Respuesta de conectores sin valores de credenciales | `api/main.py` | `test_connectors_endpoint_lists_status_without_secrets` |
 | Validación de entrada en servidor (longitud de la consulta) | `api/main.py` (`QueryRequest`) | `test_query_validates_input_server_side` |
@@ -50,7 +56,11 @@ local de ramas, antes del desarrollo pesado posterior al 27 de noviembre de 2026
 | **GitHub no aplica la protección de ramas** en este repositorio privado (plan actual de la organización); la regla de `main` existe pero figura "Not enforced" | La única mitigación es el hook local `pre-push` (se puede saltar con `--no-verify`, solo existe en clones donde se active, y no impide un push hecho desde otra herramienta) y la disciplina del flujo de `CONTRIBUTING.md`. El CI corre en cada PR, pero GitHub no bloquea el merge si falla | Si la organización pasa a GitHub Team/Enterprise: la regla ya creada se activa sola, y el hook pasa a ser respaldo. No hacer público el repositorio para obtenerla |
 | El repositorio tiene un solo desarrollador | Sin revisión de pares; por eso la regla de `main` no exige aprobaciones (no podría aprobar su propio PR) | Cuando haya más colaboradores: exigir 1 aprobación y revisar `CODEOWNERS` |
 | Nombres y reparto de roles son provisionales | Hay que validarlos con Dirección | Antes de implementar el login |
-| Ollama `llama3.1:8b` como anonimizador y clasificador | Es el modelo calibrado hoy; se compensa con piso por conector y scrubber (ver sección 3) | Con cada cambio de modelo, correr el eval |
+| Ollama `llama3.1:8b` como anonimizador y clasificador | Es el modelo calibrado hoy; se compensa con piso por conector y con el scrubber determinista (sección 1) | Con cada cambio de modelo, correr el eval |
+| El scrubber es una red de seguridad, no una prueba de limpieza | No detecta cantidades escritas en palabras ("un millón doscientos mil"), homoglifos (letras cirílicas que imitan latinas) ni nombres de personas o empresas fuera de la lista de fuentes conocidas; para eso depende del modelo local. Es conservador: puede **bloquear de más** (p. ej. un número de 7 o más dígitos que sea un folio legítimo) y el usuario recibe un mensaje genérico | En el primer eval con consultas reales; al llegar cada conector, pasar a `known_names` los nombres de sus clientes y proveedores |
+| El hash de auditoría es SHA-256 simple, no HMAC | Sirve para correlacionar y probar integridad; no oculta consultas muy cortas frente a quien ya tenga el log | Al implementar el almacén de auditoría (HMAC con clave dedicada) |
+| Las respuestas de Claude no pasan por el scrubber | Solo se re-etiquetan alias en local y se muestran a un usuario autenticado; no vuelven a salir de la red | Si la respuesta se reenvía a otro sistema o canal |
+| El candado del constructor de `OutboundPayload` evita errores de código, no a quien tenga acceso al proceso | Es defensa contra accidentes; el control real es que el payload solo sale de `prepare_outbound` y que las pruebas fijan que solo `claude_node` importa el SDK | Si se añade otro nodo que hable con un modelo externo |
 
 ## 3. Explícitamente no resuelto
 
@@ -59,15 +69,15 @@ todo** (`get_current_principal` devuelve 401) y el pipeline **no está expuesto
 por la API**: `POST /api/v1/query` responde 501.
 
 1. **Autenticación inexistente.** Falta login, sesiones (cookie `httpOnly` firmada con `API_SESSION_SECRET`), hash argon2, protección contra fuerza bruta y el segundo factor del rol `control_total`.
-2. **`claude_node` envía la consulta cruda y los nombres de archivo de las citas a Claude.** Un nombre como `Contrato_Consignacion_034.pdf` o una pregunta con el nombre de un cliente salen de la red local sin anonimizar. Se cierra con el *outbound gateway* (`privacy/outbound_gateway.py`, hoy stub). **No conectar el pipeline a la API ni a usuarios reales antes de esto.**
-3. **Sin scrubber determinista.** La anonimización depende solo del LLM local (probabilístico). Falta la capa de regex (RFC, CURP, correos, teléfonos, CLABE, montos) y bloquear el envío si quedan hallazgos (`privacy/scrubber.py`, stub).
+2. **Logs locales con la consulta cruda.** `retriever_node` registra la consulta del usuario y los nombres de las fuentes recuperadas en el log INFO. No sale de la red, pero cualquiera con acceso a los logs la vería. Pendiente: registrar solo hash y longitud.
+3. **Sin medición con modelos reales.** Las pruebas del gateway usan modelos falsos. Falta medir con el Ollama real cuántas consultas bloquea el scrubber de más (falsos positivos) y cuántos datos deja pasar el anonimizador antes de que el scrubber los vea.
 4. **Sin filtrado por rol a nivel de documento en Qdrant.** Falta indexar `sensitivity` y `allowed_roles` en el payload y filtrar en cada consulta. Un filtro de payload tampoco basta por sí solo: el control real vive también en la API.
-5. **Sin auditoría.** No hay registro de quién consultó qué ni de qué salió hacia Claude (se registrará hash del payload, nunca contenido).
+5. **Auditoría incompleta.** Se registra cada envío a Claude (hash, nivel, motivos) en el logger `mhia.audit`, pero no *quién* consultó qué (depende del login), no hay almacén propio y el registro no está protegido contra alteración.
 6. **Sin rate limiting** en la API.
 7. **Inyección de instrucciones vía documentos.** Un documento de Drive o un registro del CRM puede contener texto que intente instruir al modelo. Mitigación prevista: el nodo Claude no tiene herramientas ni acciones (solo produce texto), el contexto va delimitado y la respuesta exige citas; falta una prueba adversarial.
 8. **Eval del router al 89 %** con 3 fallas conocidas sin resolver; ahora, además, el piso por conector cubre ERP/CRM/Firestore, pero Drive sigue dependiendo del router y del mapeo de carpetas.
 9. **Listas blancas de campos** de ERP, CRM y Firestore por construir (llegan con cada conector).
-10. **Prompt injection hacia el anonimizador**, **backups y restauración** de Qdrant y del manifest, **rotación de secretos**, **escaneo de dependencias e imágenes** (Dependabot/Trivy): sin implementar.
+10. **Prompt injection hacia el anonimizador** (mitigada en parte: el scrubber bloquea lo que el modelo deje pasar en los formatos conocidos, y las cabeceras reservadas en la entrada hacen fallar la anonimización), **backups y restauración** de Qdrant y del manifest, **rotación de secretos**, **escaneo de dependencias e imágenes** (Dependabot/Trivy): sin implementar.
 11. **Sin CSP con nonce** ni protección CSRF explícita (la cookie de sesión será `SameSite=Strict`; se verificará al implementar el login).
 
 ---
