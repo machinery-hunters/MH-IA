@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
 import { RegisterServiceWorker } from "@/components/RegisterServiceWorker";
+import { SessionProvider } from "@/components/SessionProvider";
 
 import "./globals.css";
 
@@ -22,7 +23,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="es">
       <body>
-        {children}
+        <SessionProvider>{children}</SessionProvider>
         <RegisterServiceWorker />
       </body>
     </html>
