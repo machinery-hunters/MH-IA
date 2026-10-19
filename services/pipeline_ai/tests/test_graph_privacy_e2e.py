@@ -59,7 +59,8 @@ class FakeStore:
     def __init__(self, results):
         self.results = results
 
-    async def asimilarity_search_with_score(self, query, k):
+    async def asimilarity_search_with_score(self, query, k, filter=None):
+        # Ignora el filtro a propósito: así las pruebas de RBAC comprueban la 2ª capa.
         return self.results
 
 
@@ -96,8 +97,8 @@ def install(
     return SimpleNamespace(anonymizer=anonymizer, claude=claude)
 
 
-async def _run(query=QUERY):
-    return await mhia_graph.ainvoke({"query": query, "role": "lider", "session_id": "t1"})
+async def _run(query=QUERY, role="lider"):
+    return await mhia_graph.ainvoke({"query": query, "role": role, "session_id": "t1"})
 
 
 # -- Camino confidencial ---------------------------------------------------------------
@@ -235,3 +236,47 @@ async def test_without_evidence_the_flow_aborts_before_the_gateway_and_claude(mo
     assert world.anonymizer.prompts == []
     assert result["aborted"] is True
     assert "no tengo información" in result["final_answer"].lower()
+
+
+# -- RBAC: el rol decide qué contenido llega al pipeline ---------------------------------------
+
+
+async def test_a_consulta_user_never_reaches_confidential_documents_nor_claude(monkeypatch):
+    # El "Qdrant" falso ignora el filtro y devuelve un documento de proveedores.
+    world = install(monkeypatch)
+
+    result = await _run(role="consulta")
+
+    assert world.claude.calls == []
+    assert world.anonymizer.prompts == []
+    assert result["aborted"] is True
+    assert result["retrieval_ok"] is False
+    assert "no tengo información" in result["final_answer"].lower()
+    # Ni el contenido ni el nombre del documento prohibido aparecen en la salida.
+    visible = result["final_answer"] + result.get("abort_reason", "")
+    assert "Acme" not in visible and "Contrato_Consignacion" not in visible
+    assert result.get("citations", []) == []
+
+
+async def test_a_consulta_user_can_use_non_confidential_documents(monkeypatch):
+    world = install(
+        monkeypatch,
+        domain="general",
+        doc_domain="general",
+        body="El proceso de reorganización del almacén avanza según lo planeado.",
+        claude_reply="Avanza según lo planeado [Fuente: Fuente_1]",
+    )
+
+    result = await _run("¿Cómo va la reorganización del almacén?", role="consulta")
+
+    assert len(world.claude.calls) == 1
+    assert result["aborted"] is False
+
+
+async def test_a_request_without_a_role_is_answered_as_no_evidence(monkeypatch):
+    world = install(monkeypatch, domain="general", doc_domain="general", body="Texto interno.")
+
+    result = await mhia_graph.ainvoke({"query": "¿Qué dice el texto?", "session_id": "t1"})
+
+    assert world.claude.calls == []
+    assert result["retrieval_ok"] is False

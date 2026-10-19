@@ -2,24 +2,28 @@
 API de MH IA (FastAPI). Es la frontera entre la GUI (Next.js) y el pipeline.
 
 /health, login/logout con sesión por cookie (api/auth_routes.py), /api/v1/me y
-/api/v1/connectors con RBAC real, y /api/v1/query como 501 hasta que se construya el flujo
-multi-agente.
+/api/v1/connectors con RBAC real, y /api/v1/query, que ejecuta el grafo de privacidad
+(router -> retriever con filtro por rol -> anonimizador -> gateway -> Claude) en nombre del
+usuario de la sesión.
 La GUI nunca importa el pipeline: solo habla con esta API.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from pipeline_ai.api.auth_routes import router as auth_router
 from pipeline_ai.api.deps import require_permission
 from pipeline_ai.api.origin import request_origin_ok
+from pipeline_ai.api.query_service import QueryFailedError, QueryTimeoutError, run_query
 from pipeline_ai.config import settings
 from pipeline_ai.connectors.registry import get_connectors
 from pipeline_ai.security.roles import Permission, Principal
@@ -33,6 +37,24 @@ _CAN_CONFIGURE = Depends(require_permission(Permission.CONFIGURE_CONNECTORS))
 class QueryRequest(BaseModel):
     # Validación server-side siempre: tamaño acotado, sin confiar en la GUI.
     query: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("query")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        # Una consulta de solo espacios no tiene sentido y gastaría una pasada del pipeline.
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("La consulta no puede estar vacía.")
+        return stripped
+
+
+class QueryResponse(BaseModel):
+    # answered: respuesta fundamentada (con fuentes). no_evidence: nada visible para este rol
+    # o nada relevante (misma respuesta en ambos casos). blocked: el gateway de privacidad
+    # no autorizó el envío; no se invocó al servicio externo.
+    status: Literal["answered", "no_evidence", "blocked"]
+    answer: str
+    sources: list[str]
 
 
 def create_app(allowed_hosts: Sequence[str] | None = None) -> FastAPI:
@@ -107,15 +129,29 @@ def create_app(allowed_hosts: Sequence[str] | None = None) -> FastAPI:
             )
         return out
 
-    @app.post("/api/v1/query")
+    # Consultas simultáneas acotadas (Ollama corre en un solo equipo). Mínimo 1: un valor
+    # inválido en el entorno no puede dejar la API sin atender consultas.
+    query_slots = asyncio.Semaphore(max(1, settings.query_max_concurrency))
+
+    @app.post("/api/v1/query", response_model=QueryResponse)
     async def query(
         body: QueryRequest,
-        _: Principal = _CAN_QUERY,
-    ) -> None:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Consulta multi-agente pendiente (ver docs/ROADMAP.md).",
-        )
+        principal: Principal = _CAN_QUERY,
+    ) -> QueryResponse:
+        # El rol sale de la sesión (principal), nunca del cuerpo de la petición.
+        try:
+            outcome = await run_query(principal, body.query, slots=query_slots)
+        except QueryTimeoutError:
+            raise HTTPException(
+                status.HTTP_504_GATEWAY_TIMEOUT,
+                "La consulta tardó demasiado. Intenta de nuevo.",
+            ) from None
+        except QueryFailedError:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                "No se pudo completar la consulta. Intenta de nuevo.",
+            ) from None
+        return QueryResponse(status=outcome.status, answer=outcome.answer, sources=outcome.sources)
 
     return app
 
