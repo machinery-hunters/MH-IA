@@ -1,0 +1,27 @@
+[
+  {
+    "id": "r01",
+    "query": "Una pregunta real que un usuario haría y que SÍ tiene respuesta en un documento",
+    "expected_sources": ["Nombre exacto del archivo en Drive (sin el prefijo 'Google Drive: ')"]
+  },
+  {
+    "id": "r02",
+    "query": "Una pregunta con palabras distintas a las del documento (como la haría alguien en el día a día)",
+    "expected_sources": ["Nombre exacto del archivo en Drive"]
+  },
+  {
+    "id": "r03",
+    "query": "Una pregunta cuya respuesta está repartida en dos documentos",
+    "expected_sources": ["Archivo uno", "Archivo dos"]
+  },
+  {
+    "id": "n01",
+    "query": "Una pregunta del mismo tema pero cuyo dato NO está en ningún documento",
+    "expected_sources": []
+  },
+  {
+    "id": "n02",
+    "query": "Una pregunta totalmente ajena al negocio",
+    "expected_sources": []
+  }
+]

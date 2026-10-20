@@ -27,6 +27,7 @@ DOMAIN_SENSITIVITY: dict[str, Sensitivity] = {
     "inventario": Sensitivity.CONFIDENTIAL,
     "proveedores": Sensitivity.CONFIDENTIAL,
     "administracion": Sensitivity.CONFIDENTIAL,
+    "proyectos": Sensitivity.CONFIDENTIAL,
 }
 
 

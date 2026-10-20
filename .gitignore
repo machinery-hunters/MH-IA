@@ -34,6 +34,8 @@ Thumbs.db
 
 # Resultados del laboratorio (datos sinteticos, pero no tienen por que versionarse)
 services/pipeline_ai/lab/results/
+# Preguntas reales para evaluar la recuperacion (mencionan datos del negocio): nunca a git.
+services/pipeline_ai/lab/real_golden.json
 
 # Preferencias locales de Claude Code (plugins activos por usuario)
 .claude/settings.local.json

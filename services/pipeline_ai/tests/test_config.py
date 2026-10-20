@@ -13,6 +13,7 @@ def test_confidential_domains_cover_the_critical_categories():
         "inventario",
         "proveedores",
         "administracion",
+        "proyectos",
     }
 
 
