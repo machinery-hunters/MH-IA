@@ -59,8 +59,8 @@ class FakeStore:
     def __init__(self, results):
         self.results = results
 
-    async def asimilarity_search_with_score(self, query, k, filter=None):
-        # Ignora el filtro a propósito: así las pruebas de RBAC comprueban la 2ª capa.
+    async def search(self, query, *, domains, k):
+        # Ignora los dominios a propósito: así las pruebas de RBAC comprueban la 2ª capa.
         return self.results
 
 
@@ -91,7 +91,7 @@ def install(
         else []
     )
     monkeypatch.setattr(router_mod, "_get_router_llm", lambda: router_llm)
-    monkeypatch.setattr(retriever_mod, "_get_vectorstore", lambda: FakeStore(results))
+    monkeypatch.setattr(retriever_mod, "_get_store", lambda: FakeStore(results))
     monkeypatch.setattr(ollama_mod, "_get_anonymizer_llm", lambda: anonymizer)
     monkeypatch.setattr(claude_mod, "_get_claude", lambda: claude)
     return SimpleNamespace(anonymizer=anonymizer, claude=claude)

@@ -1,8 +1,16 @@
 """
 retriever_node
 
-Consulta Qdrant (embeddings generados localmente vía Ollama). Aplica el
-umbral de score de settings.retrieval_score_threshold.
+Recupera fragmentos de Qdrant en tres pasos:
+
+  1. CANDIDATOS: búsqueda híbrida (significado + palabras clave, retrieval/hybrid_store.py)
+     con el filtro de dominios del rol.
+  2. JUICIO: un juez local (Ollama, retrieval/judge.py) decide cuáles contienen información
+     que responde la pregunta. Es el criterio principal de relevancia.
+  3. RESPALDO: si el juez no está disponible (Ollama caído, timeout, salida inválida) se vuelve
+     al criterio anterior: piso absoluto de coseno (settings.retrieval_score_threshold) más
+     margen relativo (settings.retrieval_score_margin). Un fallo del juez nunca descarta
+     evidencia ni abre acceso a nada: el RBAC ya se aplicó antes.
 
 REGLA CRITICA #0 (RBAC - el rol decide qué contenido existe para la consulta):
 Solo se recuperan fragmentos de los dominios que el rol del usuario puede ver
@@ -12,7 +20,7 @@ válido, no se recupera nada (falla cerrada). Lo que el rol no puede ver es indi
 de lo que no existe: el flujo aborta con la misma respuesta de "sin información".
 
 REGLA CRITICA #1 (cero alucinaciones - parte 1/2):
-Si no hay documentos por encima del umbral, marca retrieval_ok=False.
+Si no queda ningún fragmento relevante, marca retrieval_ok=False.
 El grafo debe leer este flag en su edge condicional y saltar directo al
 nodo de aborto, SIN pasar por Claude.
 
@@ -28,13 +36,13 @@ import hashlib
 import logging
 from functools import lru_cache
 
-from langchain_qdrant import QdrantVectorStore
-from qdrant_client import QdrantClient
-from qdrant_client.http import models as qmodels
+from qdrant_client import AsyncQdrantClient
 
 from pipeline_ai.config import settings
 from pipeline_ai.embeddings import TaskPrefixedOllamaEmbeddings
 from pipeline_ai.privacy.outbound_gateway import assign_source_aliases
+from pipeline_ai.retrieval.hybrid_store import Candidate, HybridStore
+from pipeline_ai.retrieval.judge import JudgeUnavailable, judge_relevance
 from pipeline_ai.security.access import allowed_domains, can_view_document
 from pipeline_ai.state import Citation, MHIAState
 
@@ -45,34 +53,59 @@ _NOTHING = {"retrieved_docs": [], "citations": [], "retrieval_ok": False}
 
 
 @lru_cache
-def _get_vectorstore() -> QdrantVectorStore:
+def _get_store() -> HybridStore:
     embeddings = TaskPrefixedOllamaEmbeddings(
         model=settings.ollama_embed_model, base_url=settings.ollama_base_url
     )
-    client = QdrantClient(url=settings.qdrant_url)
-    return QdrantVectorStore(
-        client=client,
-        collection_name=settings.qdrant_collection,
-        embedding=embeddings,
-    )
-
-
-def _domain_filter(domains: tuple[str, ...]) -> qmodels.Filter:
-    """Condición de Qdrant: solo fragmentos cuyo dominio esté permitido. Un fragmento sin
-    `metadata.domain` no cumple MatchAny, así que queda fuera (falla cerrada)."""
-    return qmodels.Filter(
-        must=[
-            qmodels.FieldCondition(
-                key="metadata.domain",
-                match=qmodels.MatchAny(any=list(domains)),
-            )
-        ]
-    )
+    client = AsyncQdrantClient(url=settings.qdrant_url)
+    return HybridStore(client, settings.qdrant_collection, embeddings)
 
 
 def _query_fingerprint(query: str) -> str:
     """Huella para correlacionar en logs sin escribir la consulta (puede traer datos reales)."""
     return f"len={len(query)} sha256={hashlib.sha256(query.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _select_by_threshold(candidates: list[Candidate]) -> list[Candidate]:
+    """Criterio de respaldo: piso absoluto de coseno + margen relativo al mejor. Un candidato
+    que solo encontró la parte léxica no tiene coseno y no puede pasar por este criterio."""
+    accepted = [
+        (doc, score)
+        for doc, score in candidates
+        if score is not None and score >= settings.retrieval_score_threshold
+    ]
+    # Minimización: a Claude solo viajan los fragmentos cercanos al mejor (el piso absoluto no
+    # basta, ver config). Un margen <= 0 lo desactiva.
+    if accepted and settings.retrieval_score_margin > 0:
+        best = max(score for _, score in accepted if score is not None)
+        accepted = [
+            (doc, score)
+            for doc, score in accepted
+            if score is not None and score >= best - settings.retrieval_score_margin
+        ]
+    return accepted
+
+
+async def _select(query: str, candidates: list[Candidate]) -> list[Candidate]:
+    if not candidates:
+        return []
+    if not settings.retrieval_judge_enabled:
+        return _select_by_threshold(candidates)
+
+    try:
+        verdicts = await judge_relevance(query, [doc for doc, _ in candidates])
+    except JudgeUnavailable as exc:
+        log.warning("Juez de relevancia no disponible (%s): se usa el umbral de score.", exc)
+        return _select_by_threshold(candidates)
+
+    approved = [c for c, ok in zip(candidates, verdicts, strict=True) if ok]
+    log.info(
+        "Juez de relevancia (%s): %d de %d candidatos aprobados.",
+        _query_fingerprint(query),
+        len(approved),
+        len(candidates),
+    )
+    return approved[: max(1, settings.retrieval_max_context)]
 
 
 async def retriever_node(state: MHIAState) -> dict:
@@ -85,12 +118,12 @@ async def retriever_node(state: MHIAState) -> dict:
         log.warning("Recuperación omitida: el rol no puede ver ningún dominio.")
         return dict(_NOTHING)
 
-    results = await _get_vectorstore().asimilarity_search_with_score(
-        query, k=5, filter=_domain_filter(domains)
+    results = await _get_store().search(
+        query, domains=domains, k=max(1, settings.retrieval_candidates)
     )
 
     # Segunda capa: aunque el filtro de la base falle o se altere, lo que no es visible para
-    # este rol se descarta aquí, antes de puntuar o de armar contexto.
+    # este rol se descarta aquí, antes de juzgar o de armar contexto.
     visible = [(doc, score) for doc, score in results if can_view_document(role, doc.metadata)]
     if len(visible) != len(results):
         log.error(
@@ -100,30 +133,20 @@ async def retriever_node(state: MHIAState) -> dict:
         )
     results = visible
 
-    # Diagnóstico: siempre loguea el top-3 de scores encontrados, pase o no
-    # el umbral. Útil para calibrar RETRIEVAL_SCORE_THRESHOLD con datos reales en vez de a
-    # ciegas. La consulta NO se escribe (puede contener datos reales): solo su huella.
-    top = sorted(results, key=lambda r: r[1], reverse=True)[:3]
+    # Diagnóstico: siempre loguea los mejores cosenos encontrados, pase o no el criterio. Útil
+    # para calibrar el respaldo con datos reales. La consulta NO se escribe (puede contener
+    # datos reales): solo su huella.
+    dense = [r for r in results if r[1] is not None]
+    top = sorted(dense, key=lambda r: r[1], reverse=True)[:3]
     log.info(
-        "Top scores (%s, umbral=%.2f): %s",
+        "Candidatos (%s, %d; umbral de respaldo=%.2f), top cosenos: %s",
         _query_fingerprint(query),
+        len(results),
         settings.retrieval_score_threshold,
         [(round(score, 4), doc.metadata.get("source", "?")) for doc, score in top],
     )
 
-    accepted = [
-        (doc, score) for doc, score in results if score >= settings.retrieval_score_threshold
-    ]
-    # Minimización: a Claude solo viajan los fragmentos cercanos al mejor (el piso absoluto no
-    # basta, ver config). Un margen <= 0 lo desactiva.
-    if accepted and settings.retrieval_score_margin > 0:
-        best = max(score for _, score in accepted)
-        accepted = [
-            (doc, score)
-            for doc, score in accepted
-            if score >= best - settings.retrieval_score_margin
-        ]
-
+    accepted = await _select(query, results)
     if not accepted:
         return dict(_NOTHING)
 
@@ -132,7 +155,7 @@ async def retriever_node(state: MHIAState) -> dict:
         {
             "source": doc.metadata.get("source", "desconocido"),
             "chunk_id": doc.metadata.get("chunk_id", ""),
-            "score": float(score),
+            "score": float(score) if score is not None else 0.0,
         }
         for doc, score in accepted
     ]
