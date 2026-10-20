@@ -17,7 +17,6 @@ import _env  # DEBE ir antes que pipeline_ai: fija QDRANT_URL/COLLECTION antes d
 
 # isort: split
 from qdrant_client import QdrantClient
-from qdrant_client.http import models as qmodels
 
 from pipeline_ai.config import settings
 from pipeline_ai.embeddings import TaskPrefixedOllamaEmbeddings
@@ -25,6 +24,7 @@ from pipeline_ai.ingestion.chunker import chunk_file
 from pipeline_ai.ingestion.domain_mapping import infer_domain_from_folder_path
 from pipeline_ai.ingestion.drive_client import DriveFile
 from pipeline_ai.ingestion.loaders import extract_text
+from pipeline_ai.retrieval.collection import build_point, create_collection
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("mhia.lab.ingest")
@@ -78,10 +78,7 @@ def main() -> None:
     dim = len(embeddings.embed_query("dimension probe"))
     if settings.qdrant_collection in [c.name for c in client.get_collections().collections]:
         client.delete_collection(settings.qdrant_collection)
-    client.create_collection(
-        collection_name=settings.qdrant_collection,
-        vectors_config=qmodels.VectorParams(size=dim, distance=qmodels.Distance.COSINE),
-    )
+    create_collection(client, settings.qdrant_collection, dim)
     log.info("Coleccion '%s' recreada (dim=%d)", settings.qdrant_collection, dim)
 
     total_chunks = 0
@@ -92,11 +89,7 @@ def main() -> None:
             continue
         vectors = embeddings.embed_documents([d.page_content for d in docs])
         points = [
-            qmodels.PointStruct(
-                id=_point_id(doc.metadata["chunk_id"]),
-                vector=vector,
-                payload={"page_content": doc.page_content, "metadata": doc.metadata},
-            )
+            build_point(_point_id(doc.metadata["chunk_id"]), doc, vector)
             for doc, vector in zip(docs, vectors, strict=True)
         ]
         client.upsert(collection_name=settings.qdrant_collection, points=points)

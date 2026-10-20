@@ -38,6 +38,15 @@ class Settings:
     # Corte relativo (minimización de datos): solo se conservan los fragmentos cuyo score está
     # a menos de `margen` del mejor. 0 = desactivado (solo piso absoluto).
     retrieval_score_margin: float = float(os.getenv("RETRIEVAL_SCORE_MARGIN", "0.06"))
+    # Juez de relevancia local (Ollama): decide qué fragmentos candidatos responden de verdad la
+    # pregunta. Es el criterio principal; el piso/margen de arriba queda como respaldo si el
+    # juez falla. Cada consulta lanza hasta `candidates` juicios (de a `concurrency`).
+    retrieval_judge_enabled: bool = _env_bool("RETRIEVAL_JUDGE_ENABLED", True)
+    retrieval_candidates: int = int(os.getenv("RETRIEVAL_CANDIDATES", "8"))
+    # Máximo de fragmentos aprobados que viajan al contexto (minimización de datos).
+    retrieval_max_context: int = int(os.getenv("RETRIEVAL_MAX_CONTEXT", "4"))
+    retrieval_judge_timeout_s: float = float(os.getenv("RETRIEVAL_JUDGE_TIMEOUT_S", "30"))
+    retrieval_judge_concurrency: int = int(os.getenv("RETRIEVAL_JUDGE_CONCURRENCY", "2"))
 
     # ── Anonimizador local ───────────────────────────────────────────────
     # Tope de tiempo (s) por llamada al LLM local que detecta nombres propios. Si se excede,

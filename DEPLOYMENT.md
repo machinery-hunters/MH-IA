@@ -140,6 +140,7 @@ tailscale serve --bg 3000
 **Datos**
 - [ ] Opción A (recomendada): reindexar con `docker exec -it mhia-api python -m pipeline_ai.ingestion.run_ingest`.
 - [ ] Opción B: copiar un snapshot de Qdrant, solo si el modelo de embeddings es idéntico.
+- [ ] La colección debe crearse con la ingesta de esta versión (esquema híbrido: vector denso + palabras clave). Un snapshot de una colección anterior solo responde por significado.
 
 **Verificación**
 - [ ] `docker compose -f docker-compose.yml -f docker-compose.mac.yml ps` con todo `healthy`.
@@ -158,4 +159,6 @@ tailscale serve --bg 3000
 
 - Usa los mismos `OLLAMA_LLM_MODEL` y `OLLAMA_EMBED_MODEL` en ambas máquinas para que router y anonimizador sean comparables. Los pesos se descargan por separado (`ollama pull`).
 - Si cambias `OLLAMA_EMBED_MODEL`, hay que **reindexar** la colección de Qdrant.
+- Las colecciones creadas antes de la búsqueda híbrida siguen funcionando, pero solo por significado, y la ingesta se niega a escribir en ellas. Para activar las palabras clave: cambia `QDRANT_COLLECTION` a un nombre nuevo, borra `sync_manifest.json`, corre la ingesta, apunta la API a la colección nueva y borra la anterior.
+- El juez de relevancia usa el mismo `OLLAMA_LLM_MODEL` que el router y el anonimizador (`RETRIEVAL_JUDGE_ENABLED=false` lo apaga y vuelve al umbral de score).
 - Las imágenes propias (`mhia-api`, `web`) compilan para `linux/amd64` y `linux/arm64` (verificado en CI).

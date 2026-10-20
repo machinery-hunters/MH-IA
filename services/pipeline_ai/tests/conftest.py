@@ -12,6 +12,13 @@ from pipeline_ai.security import auth_store, clock, passwords, secretbox
 PASSWORD = "correct-horse-battery"
 
 
+@pytest.fixture(autouse=True)
+def _judge_off_by_default(monkeypatch):
+    """Las pruebas no deben llamar a Ollama por accidente: el juez de relevancia local viene
+    encendido en producción y cada prueba que lo necesita lo enciende (y lo sustituye)."""
+    monkeypatch.setattr(settings, "retrieval_judge_enabled", False)
+
+
 class FakeClock:
     """Reloj controlable: `clock.now()` devuelve `t`; `advance()` viaja en el tiempo."""
 
