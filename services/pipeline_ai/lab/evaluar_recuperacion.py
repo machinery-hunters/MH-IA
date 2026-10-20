@@ -10,8 +10,14 @@ compara las fuentes que llegarian al contexto contra `expected_sources`:
   python lab\\evaluar_recuperacion.py --etiqueta antes
   python lab\\evaluar_recuperacion.py --etiqueta despues --rol lider
 
-Guarda lab/results/recuperacion_<etiqueta>.json para comparar corridas. Usa los documentos
-SINTETICOS del laboratorio; no apuntar a datos reales.
+Con datos REALES ya ingestados en otra coleccion del Qdrant local (preguntas escritas por ti en
+lab/real_golden.json, que git ignora; formato en lab/real_golden.example.json):
+
+  $env:LAB_COLLECTION='mhia_real_eval'
+  python lab\\evaluar_recuperacion.py --golden lab\\real_golden.json --etiqueta real --rol lider
+
+Guarda lab/results/recuperacion_<etiqueta>.json (solo ids y nombres de archivo; git lo ignora)
+para comparar corridas. Por defecto usa los documentos SINTETICOS del laboratorio.
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ import argparse
 import asyncio
 import json
 import time
+from pathlib import Path
 
 import _env  # DEBE ir antes que pipeline_ai: fija QDRANT_URL/COLLECTION antes de leer settings
 
@@ -33,8 +40,8 @@ def _short(source: str) -> str:
     return source.removeprefix("Google Drive: ")
 
 
-async def _run(role: str) -> list[dict]:
-    questions = json.loads(GOLDEN.read_text(encoding="utf-8"))
+async def _run(role: str, golden: Path) -> list[dict]:
+    questions = json.loads(golden.read_text(encoding="utf-8"))
     rows = []
     for q in questions:
         started = time.perf_counter()
@@ -81,9 +88,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--etiqueta", default="corrida")
     parser.add_argument("--rol", default="control_total")
+    parser.add_argument("--golden", type=Path, default=GOLDEN, help="archivo de preguntas")
     args = parser.parse_args()
 
-    rows = asyncio.run(_run(args.rol))
+    rows = asyncio.run(_run(args.rol, args.golden))
     for r in rows:
         mark = "" if set(r["got"]) == set(r["expected"]) else "  <-- difiere"
         print(f"{r['id']:<4} esperado={r['expected']} llega={r['got']} ({r['seconds']}s){mark}")

@@ -20,7 +20,10 @@ SERVICE_DIR = LAB_DIR.parent
 DOCS_DIR = LAB_DIR / "docs"
 RESULTS_DIR = LAB_DIR / "results"
 
-LAB_COLLECTION = "mhia_lab_docs"
+# LAB_COLLECTION permite apuntar las herramientas de MEDICION (evaluar_recuperacion.py) a otra
+# coleccion del mismo Qdrant desechable, p. ej. una con datos reales ingestados para evaluar.
+# lab_ingest.py recrea esta coleccion en cada corrida: no lo uses con una que quieras conservar.
+LAB_COLLECTION = os.environ.get("LAB_COLLECTION", "mhia_lab_docs")
 LAB_QDRANT_URL = os.environ.get("LAB_QDRANT_URL", "http://127.0.0.1:6333")
 LAB_OLLAMA_URL = os.environ.get("LAB_OLLAMA_URL", "http://127.0.0.1:11434")
 

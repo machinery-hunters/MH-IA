@@ -140,6 +140,7 @@ class Settings:
         "inventario",
         "proveedores",
         "administracion",
+        "proyectos",
     )
 
     def require(self, *fields: str) -> None:

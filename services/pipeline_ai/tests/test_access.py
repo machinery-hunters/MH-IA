@@ -6,7 +6,7 @@ from pipeline_ai.privacy.sensitivity import DOMAIN_SENSITIVITY, Sensitivity, sen
 from pipeline_ai.security.access import allowed_domains, can_view_document
 from pipeline_ai.security.roles import Role, can_view
 
-CONFIDENTIAL_DOMAINS = {"ventas", "inventario", "proveedores", "administracion"}
+CONFIDENTIAL_DOMAINS = {"ventas", "inventario", "proveedores", "administracion", "proyectos"}
 
 
 def test_consulta_only_sees_non_confidential_domains():

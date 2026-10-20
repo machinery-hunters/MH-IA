@@ -238,6 +238,7 @@ async def test_the_store_is_asked_for_exactly_the_domains_the_role_may_see(run):
         "inventario",
         "proveedores",
         "administracion",
+        "proyectos",
     }
 
 
