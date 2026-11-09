@@ -2,7 +2,7 @@
 # activa recarga automática. NO usar en producción (mounts de código,
 # filesystem escribible).
 #
-#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.dev.yml up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.host-ollama.yml -f docker-compose.dev.yml up -d --build
 
 services:
   mhia-api:

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Ollama nativo (Metal) como servicio del sistema, con el usuario sin privilegios
+  __MHIA_USER__. Lo instala scripts/mac/setup.sh en /Library/LaunchDaemons.
+  OLLAMA_HOST queda en 127.0.0.1: Ollama no tiene autenticación y nunca debe
+  escuchar en la LAN.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.machineryhunters.mhia.ollama</string>
+  <key>UserName</key>
+  <string>__MHIA_USER__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__BREW_PREFIX__/bin/ollama</string>
+    <string>serve</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__MHIA_HOME__</string>
+    <key>OLLAMA_HOST</key>
+    <string>127.0.0.1:11434</string>
+    <key>OLLAMA_MODELS</key>
+    <string>__MHIA_HOME__/.ollama/models</string>
+    <key>OLLAMA_KEEP_ALIVE</key>
+    <string>30m</string>
+    <key>OLLAMA_MAX_LOADED_MODELS</key>
+    <string>2</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>StandardOutPath</key>
+  <string>__MHIA_HOME__/Library/Logs/mhia/ollama.log</string>
+  <key>StandardErrorPath</key>
+  <string>__MHIA_HOME__/Library/Logs/mhia/ollama.log</string>
+</dict>
+</plist>

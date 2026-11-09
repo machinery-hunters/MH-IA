@@ -450,7 +450,7 @@ ese límite (`iogpu.wired_limit_mb`) con cuidado de dejar memoria al sistema.
 |---|---|---|
 | Ollama | Nativo con `brew`, servicio `launchd`, solo en `127.0.0.1` | Docker en macOS no pasa la GPU Metal a contenedores |
 | Contenedores | **Colima** (sin interfaz, CLI, gratuito) | Docker Desktop es cómodo, pero su licencia depende del tamaño de la empresa; Colima arranca bien sin sesión gráfica. La herramienta `container` de Apple se revisa más adelante |
-| API, web, Qdrant, Postgres | Compose actual + `docker-compose.mac.yml` + servicio Postgres | Todas las imágenes son ARM64 |
+| API, web, Qdrant, Postgres | Compose actual + `docker-compose.host-ollama.yml` + servicio Postgres | Todas las imágenes son ARM64 |
 | Arranque automático | `launchd` para Ollama y Colima; `restart: unless-stopped` + healthchecks en compose | Validado con un reinicio real, no supuesto |
 | Red remota | Tailscale como servicio del sistema (arranca antes del login) | Ver sección 4 |
 | Disco | FileVault activo | Protege ante robo del equipo |
@@ -705,7 +705,7 @@ No compite con Minutas IA: es configuración, no lógica de negocio.
 - Instalación en persona: cuentas, FileVault, `pmset`, firewall, SSH con llave,
   Tailscale como servicio, UPS.
 - Homebrew, Git, Ollama nativo, Colima, modelos actuales.
-- Clonar `develop`, levantar con `docker-compose.mac.yml` y correr el
+- Clonar `develop`, levantar con `docker-compose.host-ollama.yml` y correr el
   laboratorio sintético de punta a punta.
 - Backups diarios de Qdrant y del manifest, y primer simulacro de restauración.
 - Script de salud con alerta.

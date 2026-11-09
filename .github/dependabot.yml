@@ -1,0 +1,35 @@
+# Actualizaciones propuestas como PR a develop (gratis en GitHub). Nada se aplica solo:
+# cada PR pasa CI y se prueba en la laptop antes de llegar a la Mac (docs/PLAN-MAESTRO.md §3.6).
+# Las dependencias de Python viven en requirements.lock (uv pip compile): se refrescan
+# a mano cada mes con  .\scripts\dev.ps1 lock-upgrade  (o make lock-upgrade).
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /services/pipeline_ai
+    target-branch: develop
+    schedule: { interval: monthly }
+    labels: [dependencias]
+  - package-ecosystem: docker
+    directory: /web
+    target-branch: develop
+    schedule: { interval: monthly }
+    labels: [dependencias]
+  - package-ecosystem: docker-compose
+    directory: /
+    target-branch: develop
+    schedule: { interval: monthly }
+    labels: [dependencias]
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule: { interval: monthly }
+    labels: [dependencias]
+  - package-ecosystem: npm
+    directory: /web
+    target-branch: develop
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 5
+    labels: [dependencias]
+    groups:
+      menores:
+        update-types: [minor, patch]

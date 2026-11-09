@@ -1,17 +1,28 @@
 # Despliegue de MH IA — por entorno
 
-El código es idéntico en ambas máquinas. Cambia **dónde corre Ollama** (override
-de compose) y **cómo se llega a la GUI** (localhost en desarrollo, Tailscale en
-producción). Reglas de red y puertos: `SECURITY.md`.
+El código, las imágenes, las dependencias y los modelos son **idénticos** en
+ambas máquinas, y Ollama corre nativo en las dos. Cambia solo el sistema
+operativo, el script de operación (`scripts/dev.ps1` en Windows,
+`scripts/mac/mhia.sh` en la Mac) y **cómo se llega a la GUI** (localhost en
+desarrollo, Tailscale en producción). Reglas de red y puertos: `SECURITY.md`.
 
 Archivos de compose:
 
 | Archivo | Para qué |
 |---|---|
 | `docker-compose.yml` | Base: `qdrant`, `mhia-api`, `web`, redes `backend` y `edge` |
-| `docker-compose.gpu.yml` | Laptop: suma `ollama` en contenedor con GPU NVIDIA |
-| `docker-compose.mac.yml` | Mac mini: Ollama nativo en el host |
+| `docker-compose.host-ollama.yml` | **Modo por defecto** (Windows y Mac): Ollama nativo en el host |
+| `docker-compose.gpu.yml` | Opcional en la laptop: `ollama` en contenedor con GPU NVIDIA |
 | `docker-compose.dev.yml` | Solo desarrollo: monta código y recarga |
+
+Qué queda fijo para que la laptop y la Mac sean iguales:
+
+| Pieza | Dónde se fija | Quién lo verifica |
+|---|---|---|
+| Imágenes (Python, Node, Qdrant, Ollama, gitleaks) | versión + `@sha256` en compose, Dockerfiles y CI | `tests/test_portability.py` |
+| Paquetes de Python | `services/pipeline_ai/requirements.lock` y `requirements-dev.lock` (con hash) | `pip --require-hashes`, pruebas |
+| Versión de Ollama y modelos (tag + id) | `scripts/ollama-models.txt` | `doctor` en cada equipo |
+| Saltos de línea y codificación | `.gitattributes` (LF), `.ps1` con BOM UTF-8 | pruebas |
 
 ---
 
@@ -20,53 +31,66 @@ Archivos de compose:
 Acer Predator Helios Neo 16S AI · Core Ultra 9 · RTX 5070 Ti (12 GB) · 32 GB RAM.
 
 ```powershell
+# 0. Ollama nativo para Windows, misma versión que la Mac (scripts/ollama-models.txt)
+winget upgrade Ollama.Ollama          # o winget install Ollama.Ollama la primera vez
+
 # 1. Preparar variables (el .env NUNCA se versiona)
 Copy-Item .env.example .env
 # editar .env: ANTHROPIC_API_KEY como mínimo
 
-# 2. Validar el entorno sin levantar nada
-.\scripts\dev.ps1 doctor
-
-# 3. Levantar y descargar modelos (una sola vez)
-.\scripts\dev.ps1 up
+# 2. Modelos (una sola vez) y validar el entorno sin levantar nada
 .\scripts\dev.ps1 pull-models
+.\scripts\dev.ps1 doctor              # compara versión de Ollama y id de cada modelo
 
-# 4. Verificar
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml ps
+# 3. Levantar y verificar
+.\scripts\dev.ps1 up
+.\scripts\dev.ps1 ps
+.\scripts\dev.ps1 doctor              # con el stack arriba, prueba también mhia-api -> Ollama
 Invoke-WebRequest http://127.0.0.1:8000/health -UseBasicParsing   # {"status":"ok"}
 Start-Process http://127.0.0.1:3000                                 # GUI
 ```
 
-Confirmar que Docker ve la GPU (una vez):
+Ollama para Windows usa la RTX por CUDA de forma nativa; no hace falta pasar
+la GPU a Docker. Para probar Ollama aislado en un contenedor (modo anterior),
+agrega `-OllamaMode docker` a cualquier tarea y confirma una vez que Docker ve
+la GPU:
 
 ```powershell
 docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+.\scripts\dev.ps1 up -OllamaMode docker
+.\scripts\dev.ps1 pull-models -OllamaMode docker
 ```
 
-Qdrant y Ollama **no están accesibles desde `localhost`** (por diseño). Para
-inspeccionarlos: `docker exec -it mhia-api python -c "..."` o
-`docker compose exec`.
+Qdrant **no está accesible desde `localhost`** (por diseño). Para
+inspeccionarlo: `docker compose exec mhia-api python -c "..."`.
 
-Con 12 GB de VRAM puedes probar `qwen2.5:14b-instruct-q4_K_M`; cambia
-`OLLAMA_LLM_MODEL` en `.env` y vuelve a levantar `mhia-api`.
+Para probar otro modelo (por ejemplo `qwen2.5:14b-instruct-q4_K_M`): `ollama
+pull`, cambia `OLLAMA_LLM_MODEL` en `.env`, mide con el laboratorio y, si se
+adopta, actualiza `scripts/ollama-models.txt` en un PR para que la Mac reciba
+exactamente el mismo.
 
 ---
 
-## 2. Producción — Mac mini M5 Pro (zsh)
+## 2. Producción — Mac mini M5 Pro
 
-Ollama corre **nativo** (Metal). Docker Desktop for Mac no pasa la GPU de
-Apple Silicon a contenedores.
+Guía paso a paso: **`scripts/mac/README.md`**. En resumen:
 
 ```bash
-brew install ollama git
-brew services start ollama          # escucha solo en 127.0.0.1; NO cambiar OLLAMA_HOST
-ollama pull llama3.1:8b
-ollama pull nomic-embed-text
-
-git clone <URL_DEL_REPO> mh-ia && cd mh-ia
-cp .env.example .env                # completar; MHIA_ENV=production, API_SESSION_SECRET (>= 32), API_TOTP_KEY
-docker compose -f docker-compose.yml -f docker-compose.mac.yml up -d --build
+sudo bash scripts/mac/setup.sh       # FileVault, brew, usuario mhia, launchd, energía
+# clonar como mhia con la llave de solo lectura que imprime setup.sh
+# copiar .env (chmod 600) y credentials/ por un canal seguro
+mhia pull-models
+mhia up
+mhia doctor
 ```
+
+- Ollama corre **nativo** (Metal) como LaunchDaemon del usuario `mhia`,
+  escuchando solo en `127.0.0.1`. Docker en macOS no pasa la GPU de Apple
+  Silicon a contenedores.
+- Docker lo da **Colima** (sin Docker Desktop: sin licencia y sin sesión
+  gráfica), también como LaunchDaemon. Los contenedores arrancan solos al
+  iniciar la VM.
+- Respaldo diario a las 02:30 y chequeo de salud cada 5 minutos (launchd).
 
 En producción `MHIA_ENV=production`: la API **se niega a arrancar** si falta
 `ANTHROPIC_API_KEY`, `API_SESSION_SECRET` o `API_TOTP_KEY`, si el secreto de
@@ -93,8 +117,34 @@ docker compose run --rm mhia-api python -m pipeline_ai.security.manage list-user
 
 Otros comandos: `reset-password`, `set-role`, `disable-user`, `enable-user`,
 `unlock`, `revoke-sessions`. La base (`data/auth.db`) vive en el volumen
-`./data`; respáldala junto con `.env` (sin la clave TOTP los secretos
-enrolados no se pueden descifrar).
+`./data` y entra en el respaldo diario. Guarda una copia de `.env` aparte y
+fuera de la Mac (sin `API_TOTP_KEY` los secretos TOTP enrolados no se pueden
+descifrar): el respaldo automático **no** incluye `.env`.
+
+### Respaldos y restauración
+
+Corren dentro de `mhia-api`, igual en Windows y en la Mac, y se guardan en
+`./backups/mhia-<fecha>Z/` (fuera de git): `auth.db`, el manifest de Drive, un
+snapshot por colección de Qdrant y `manifest.json` con el sha256 de cada archivo.
+
+| Tarea | Windows | Mac |
+|---|---|---|
+| Crear (y conservar 14) | `.\scripts\dev.ps1 backup` | `mhia backup` (también diario, 02:30) |
+| Verificar el último | `.\scripts\dev.ps1 backup-verify` | `mhia backup-verify` |
+| Simulacro sin riesgo | `.\scripts\dev.ps1 restore-drill` | `mhia restore-drill` |
+
+El simulacro restaura cada snapshot en una colección temporal, compara el
+número de puntos con el respaldo y la borra; las colecciones reales no se
+tocan. Hazlo al menos una vez al mes.
+
+Restaurar de verdad (reemplaza los datos actuales):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.host-ollama.yml stop mhia-api web
+docker compose -f docker-compose.yml -f docker-compose.host-ollama.yml run --rm --no-deps mhia-api \
+  python -m pipeline_ai.ops.backup restore mhia-AAAAMMDDTHHMMSSZ --force
+docker compose -f docker-compose.yml -f docker-compose.host-ollama.yml up -d
+```
 
 ---
 
@@ -131,19 +181,20 @@ tailscale serve --bg 3000
 ## 4. Checklist de migración laptop → Mac mini
 
 **Antes**
-- [ ] Mac mini con macOS al día, cifrado de disco (FileVault) **activo**, usuario dedicado.
-- [ ] Docker Desktop, Homebrew, Ollama nativo y Tailscale instalados.
-- [ ] `ollama pull llama3.1:8b` y `ollama pull nomic-embed-text` (mismo `OLLAMA_EMBED_MODEL` que en la laptop).
-- [ ] `.env` y `credentials/` copiados por un canal seguro (nunca por git ni chat).
-- [ ] Versiones de `qdrant` y `ollama` fijadas en compose (ver `SECURITY.md`, "aceptado").
+- [ ] Mac mini con macOS al día y FileVault **activo**.
+- [ ] `sudo bash scripts/mac/setup.sh` sin errores (usuario `mhia`, Colima, Ollama, launchd).
+- [ ] Repo clonado como `mhia` en `main` con la llave de despliegue de solo lectura.
+- [ ] `mhia pull-models` y `mhia doctor` en verde (misma versión de Ollama y mismos id de modelo que la laptop).
+- [ ] `.env` y `credentials/` copiados por un canal seguro (nunca por git ni chat), `chmod 600 .env`.
 
 **Datos**
 - [ ] Opción A (recomendada): reindexar con `docker exec -it mhia-api python -m pipeline_ai.ingestion.run_ingest`.
-- [ ] Opción B: copiar un snapshot de Qdrant, solo si el modelo de embeddings es idéntico.
+- [ ] Opción B: en la laptop `.\scripts\dev.ps1 backup`, copiar la carpeta del respaldo a `backups/` de la Mac y restaurarla (sección 2). Válido porque el id del modelo de embeddings es el mismo (lo comprueba el doctor).
 - [ ] La colección debe crearse con la ingesta de esta versión (esquema híbrido: vector denso + palabras clave). Un snapshot de una colección anterior solo responde por significado.
 
 **Verificación**
-- [ ] `docker compose -f docker-compose.yml -f docker-compose.mac.yml ps` con todo `healthy`.
+- [ ] `mhia ps` con todo `healthy` y `mhia doctor` en verde (incluye mhia-api -> Ollama).
+- [ ] `mhia backup` y `mhia restore-drill` correctos.
 - [ ] `curl http://127.0.0.1:8000/health` responde `ok`.
 - [ ] Ningún puerto publicado fuera de `127.0.0.1` (`docker ps`).
 - [ ] `docker exec -it mhia-api python -m eval.eval_router` iguala el resultado de la laptop.
@@ -157,7 +208,7 @@ tailscale serve --bg 3000
 
 ## 5. Notas de portabilidad de modelos
 
-- Usa los mismos `OLLAMA_LLM_MODEL` y `OLLAMA_EMBED_MODEL` en ambas máquinas para que router y anonimizador sean comparables. Los pesos se descargan por separado (`ollama pull`).
+- Los modelos exactos (tag e id) están en `scripts/ollama-models.txt`; los doctores de ambos equipos fallan si no coinciden. Los pesos se descargan por separado (`ollama pull`), pero el id garantiza que son los mismos.
 - Si cambias `OLLAMA_EMBED_MODEL`, hay que **reindexar** la colección de Qdrant.
 - Las colecciones creadas antes de la búsqueda híbrida siguen funcionando, pero solo por significado, y la ingesta se niega a escribir en ellas. Para activar las palabras clave: cambia `QDRANT_COLLECTION` a un nombre nuevo, borra `sync_manifest.json`, corre la ingesta, apunta la API a la colección nueva y borra la anterior.
 - El juez de relevancia usa el mismo `OLLAMA_LLM_MODEL` que el router y el anonimizador (`RETRIEVAL_JUDGE_ENABLED=false` lo apaga y vuelve al umbral de score).

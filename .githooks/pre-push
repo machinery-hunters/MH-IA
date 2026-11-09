@@ -20,7 +20,7 @@ if [ "${MHIA_ALLOW_PROTECTED_PUSH:-}" = "1" ]; then
 fi
 
 # Entrada estándar: <ref local> <sha local> <ref remota> <sha remota>
-while read -r local_ref local_sha remote_ref remote_sha; do
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
     case "$remote_ref" in
         refs/heads/main | refs/heads/develop)
             branch="${remote_ref#refs/heads/}"

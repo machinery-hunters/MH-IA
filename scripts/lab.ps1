@@ -1,4 +1,4 @@
-# Laboratorio MH IA: prueba de punta a punta con documentos SINTETICOS.
+﻿# Laboratorio MH IA: prueba de punta a punta con documentos SINTETICOS.
 #
 #   .\scripts\lab.ps1 up       # levanta un Qdrant desechable en 127.0.0.1:6333 y revisa Ollama
 #   .\scripts\lab.ps1 ingest   # indexa services\pipeline_ai\lab\docs en la coleccion del laboratorio
