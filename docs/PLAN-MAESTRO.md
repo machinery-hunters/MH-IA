@@ -358,8 +358,8 @@ revise** antes de importar el Excel (sección 9.2).
 > actual (SQLite, `auth.db`): áreas y niveles, filtro en Qdrant y en Python,
 > RESTRICTED sin salida a Claude, rol `direccion`, presets por puesto
 > (`security/presets.py`) e importación con `manage import-users`. Pendientes:
-> Postgres (PR aparte), área por correo del dueño, permiso temporal auditado y
-> la validación de esta tabla por Dirección.
+> área por correo del dueño, permiso temporal auditado y la validación de esta
+> tabla por Dirección. Postgres llegó en el bloque 2b (ver sección 2.7).
 - **Por qué no OAuth por usuario como base:** se discutió el 20 de octubre. Da a
   MH IA acceso a archivos personales, complica la búsqueda semántica y no
   resuelve el permiso por área. Se reserva para el futuro, solo en sistemas
@@ -391,7 +391,7 @@ la consola de Anthropic.
 |---|---|---|
 | Qdrant | Fragmentos de Drive (vector denso + BM25) con payload `domain`, `sensitivity`, `allowed_areas`, `allowed_roles`, `owner_email` | Una colección por tipo de contenido; índices de payload en los campos de filtro |
 | Postgres (nuevo) | Usuarios, áreas, mapeo correo → área, configuración de conectores (sin secretos), auditoría | Entra en la fase 1. Auditoría en tabla solo de inserción, con un hash encadenado por fila para detectar alteraciones |
-| SQLite actual (`auth.db`) | Usuarios y sesiones | Se migra a Postgres en la fase 1 para tener un solo lugar de respaldo y consulta |
+| SQLite (`auth.db`) | Usuarios y sesiones | **Hecho (9 nov 2026, bloque 2b):** usuarios, áreas, sesiones y registro de cambios de permisos en Postgres; el `auth.db` se migra solo al primer arranque. SQLite queda solo para pruebas y desarrollo sin Docker. Pendiente: hash encadenado del registro, eventos de login y configuración de conectores (bloque 4 y siguientes) |
 | Secretos | `.env` del host + `credentials/` | Fuera de git, fuera del backup común; respaldo en gestor de contraseñas |
 
 ---

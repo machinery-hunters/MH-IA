@@ -265,3 +265,121 @@ def test_cli_list_and_verify(env, capsys):
     assert backup.main(["--dest", str(out.parent), "verify"]) == 0
     (out / "auth.db").write_bytes(b"x")
     assert backup.main(["--dest", str(out.parent), "verify", out.name]) == 1
+
+
+# ── Base de usuarios en Postgres (export JSON) ───────────────────────────
+# auth_env corre contra SQLite y, si hay Postgres de pruebas, también contra Postgres: el
+# respaldo en JSON es el mismo para los dos.
+
+
+@pytest.fixture
+def store_env(auth_env, make_user, tmp_path):
+    from pipeline_ai.security.areas import Area
+    from pipeline_ai.security.auth_store import Sensitivity
+
+    store = auth_env.store
+    ana = make_user("ana")
+    store.set_memberships(ana.id, {Area.TALLER: Sensitivity.CONFIDENTIAL})
+    store.record_admin_event("cli:x", "crear_usuario", "ana")
+    store.create_session("h" * 64, ana.id, mfa=False, now=1.0, absolute_s=10**9)
+    manifest = tmp_path / "data" / "sync_manifest.json"
+    manifest.parent.mkdir(exist_ok=True)
+    manifest.write_text("{}", encoding="utf-8")
+    paths = backup.Paths(auth_db=tmp_path / "data" / "no-existe.db", sync_manifest=manifest)
+    return store, paths, FakeQdrant({"mhia_drive_docs": 3}), tmp_path / "backups"
+
+
+def _create_with_store(store_env):
+    store, paths, qdrant, dest = store_env
+    return backup.create_backup(
+        dest, paths=paths, qdrant_url="http://q", transport=qdrant.transport, auth_store=store
+    )
+
+
+def test_user_database_is_exported_as_json_without_sessions(store_env):
+    out = _create_with_store(store_env)
+
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert "auth.json" in manifest["files"] and "auth.db" not in manifest["files"]
+    assert manifest["auth"]["counts"] == {"users": 1, "memberships": 1, "admin_audit": 1}
+    data = json.loads((out / "auth.json").read_text(encoding="utf-8"))
+    assert "sessions" not in data and "throttle" not in data
+    assert backup.verify_backup(out) == []
+
+
+def test_verify_detects_an_inconsistent_user_export(store_env):
+    out = _create_with_store(store_env)
+    manifest_path = out / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["auth"]["counts"]["users"] = 5  # el manifest no cuadra con el export
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert any("conteos" in p for p in backup.verify_backup(out))
+
+
+def test_drill_reports_the_user_counts(store_env):
+    _, _, qdrant, _ = store_env
+    out = _create_with_store(store_env)
+
+    report = backup.drill(out, qdrant_url="http://q", transport=qdrant.transport)
+
+    assert report["auth"] == {"users": 1, "memberships": 1, "admin_audit": 1}
+
+
+def test_restore_replaces_users_areas_and_audit_and_closes_sessions(store_env, make_user):
+    from tests.conftest import db_count
+
+    store, paths, qdrant, _ = store_env
+    out = _create_with_store(store_env)
+    make_user("intruso")
+    store.record_admin_event("cli:x", "despues_del_respaldo", "intruso")
+
+    report = backup.restore_backup(
+        out, force=True, paths=paths, qdrant_url="http://q", transport=qdrant.transport,
+        auth_store=store,
+    )  # fmt: skip
+
+    assert report["auth"] == {"users": 1, "memberships": 1, "admin_audit": 1}
+    assert [u.username for u in store.list_users()] == ["ana"]
+    assert [e.action for e in store.list_admin_events()] == ["restaurar_respaldo", "crear_usuario"]
+    assert store.list_admin_events()[0].detail == {"respaldo": out.name, "origen": "auth.json"}
+    assert db_count(store, "sessions") == 0
+
+
+def test_an_old_sqlite_backup_can_be_restored_into_the_store(env, auth_env, monkeypatch):
+    """Respaldo anterior a Postgres (con auth.db) restaurado sobre la base actual."""
+    from pipeline_ai.config import settings
+    from pipeline_ai.security import clock, passwords
+    from pipeline_ai.security.auth_store import SqliteAuthStore
+
+    dest, paths, qdrant = env
+    paths.auth_db.unlink()
+    old = SqliteAuthStore(paths.auth_db)
+    old.create_user("vieja", passwords.hash_password("x" * 12), "consulta", now=clock.now())
+    with monkeypatch.context() as m:
+        m.setattr(settings, "auth_backend", "sqlite")  # respaldo hecho en modo archivo
+        out = backup.create_backup(
+            dest, paths=paths, qdrant_url="http://q", transport=qdrant.transport
+        )
+    assert "auth.db" in json.loads((out / "manifest.json").read_text(encoding="utf-8"))["files"]
+
+    backup.restore_backup(
+        out, force=True, paths=paths, qdrant_url="http://q", transport=qdrant.transport,
+        auth_store=auth_env.store,
+    )  # fmt: skip
+
+    assert [u.username for u in auth_env.store.list_users()] == ["vieja"]
+    assert backup.verify_backup(out) == []  # el respaldo no se tocó
+
+
+def test_restoring_a_json_backup_onto_a_sqlite_file_is_refused(store_env, monkeypatch):
+    from pipeline_ai.config import settings
+
+    _, paths, qdrant, _ = store_env
+    out = _create_with_store(store_env)
+    monkeypatch.setattr(settings, "auth_backend", "sqlite")
+
+    with pytest.raises(backup.BackupError, match="AUTH_BACKEND=postgres"):
+        backup.restore_backup(
+            out, force=True, paths=paths, qdrant_url="http://q", transport=qdrant.transport
+        )

@@ -105,14 +105,28 @@ La clave TOTP se genera una vez y se guarda en `.env` (no se versiona):
 docker compose run --rm mhia-api python -m pipeline_ai.security.manage gen-key
 ```
 
+Usuarios, áreas y sesiones viven en **Postgres** (servicio `postgres` del
+compose, sin puerto publicado). Antes del primer arranque fija
+`POSTGRES_PASSWORD` en `.env` (24+ caracteres, solo letras y números; ver
+`.env.example`): sin ella Postgres no arranca. Cambiarla después exige cambiarla
+también dentro de la base (`ALTER USER mhia PASSWORD ...`).
+
+Si ya tenías usuarios en `data/auth.db`, al primer arranque con Postgres se
+**migran solos** (usuarios, contraseñas, segundo factor, áreas) y el archivo se
+renombra a `auth.db.migrado-<fecha>`; todos vuelven a iniciar sesión. Revísalo
+con `list-users` y `audit-log`. Guarda el archivo renombrado hasta comprobar que
+todo está bien.
+
 Los usuarios se crean con la CLI dentro del contenedor (la contraseña se pide
-por teclado, nunca como argumento). `control_total` exige enrolar TOTP antes de
-poder iniciar sesión:
+por teclado, nunca como argumento). Pasa `-e MHIA_ADMIN=<tu-nombre>` para que el
+registro de cambios diga quién hizo cada uno. `control_total` exige enrolar TOTP
+antes de poder iniciar sesión:
 
 ```bash
 docker compose run --rm mhia-api python -m pipeline_ai.security.manage create-user --username <usuario> --role control_total
 docker compose run --rm mhia-api python -m pipeline_ai.security.manage enroll-totp --username <usuario>
 docker compose run --rm mhia-api python -m pipeline_ai.security.manage list-users
+docker compose run --rm mhia-api python -m pipeline_ai.security.manage audit-log --limit 50
 ```
 
 Otros comandos: `reset-password`, `set-role`, `disable-user`, `enable-user`,
@@ -160,16 +174,19 @@ docker compose run --rm mhia-api python -m pipeline_ai.security.manage enable-us
 
 Reimportar actualiza rol y áreas de quien cambió (y cierra sus sesiones), sin
 tocar contraseña, segundo factor ni estado; a quien ya no está en la lista solo
-lo reporta. Borra la lista de `./data/` al terminar. La base (`data/auth.db`) vive en el volumen
-`./data` y entra en el respaldo diario. Guarda una copia de `.env` aparte y
+lo reporta. Borra la lista de `./data/` al terminar. La base de usuarios vive
+en el volumen `postgres_data` y entra en el respaldo diario. Guarda una copia de `.env` aparte y
 fuera de la Mac (sin `API_TOTP_KEY` los secretos TOTP enrolados no se pueden
 descifrar): el respaldo automático **no** incluye `.env`.
 
 ### Respaldos y restauración
 
 Corren dentro de `mhia-api`, igual en Windows y en la Mac, y se guardan en
-`./backups/mhia-<fecha>Z/` (fuera de git): `auth.db`, el manifest de Drive, un
-snapshot por colección de Qdrant y `manifest.json` con el sha256 de cada archivo.
+`./backups/mhia-<fecha>Z/` (fuera de git): `auth.json` (usuarios, áreas y
+registro de cambios; sin sesiones), el manifest de Drive, un snapshot por
+colección de Qdrant y `manifest.json` con el sha256 de cada archivo. La
+verificación carga `auth.json` en una base desechable para probar que se puede
+restaurar.
 
 | Tarea | Windows | Mac |
 |---|---|---|
@@ -181,7 +198,10 @@ El simulacro restaura cada snapshot en una colección temporal, compara el
 número de puntos con el respaldo y la borra; las colecciones reales no se
 tocan. Hazlo al menos una vez al mes.
 
-Restaurar de verdad (reemplaza los datos actuales):
+Restaurar de verdad (reemplaza los datos actuales; Postgres y Qdrant deben
+estar arriba, solo se detienen la API y la GUI). Todos vuelven a iniciar sesión
+y el registro de cambios anota la restauración. Un respaldo anterior a Postgres
+(con `auth.db`) también se restaura así:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.host-ollama.yml stop mhia-api web
@@ -189,6 +209,10 @@ docker compose -f docker-compose.yml -f docker-compose.host-ollama.yml run --rm 
   python -m pipeline_ai.ops.backup restore mhia-AAAAMMDDTHHMMSSZ --force
 docker compose -f docker-compose.yml -f docker-compose.host-ollama.yml up -d
 ```
+
+Postgres está fijado en la versión mayor 18. Subir de versión mayor (19, 20...)
+no es un simple cambio de imagen: respalda, levanta la versión nueva con un
+volumen vacío y restaura el respaldo.
 
 ---
 

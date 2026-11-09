@@ -8,6 +8,7 @@ Administración de usuarios desde el servidor (no hay registro público).
     python -m pipeline_ai.security.manage import-users --file /app/data/usuarios.xlsx [--apply]
     python -m pipeline_ai.security.manage enroll-totp --username ana
     python -m pipeline_ai.security.manage list-users
+    python -m pipeline_ai.security.manage audit-log [--limit 50]
 
 Áreas: direccion, comercial, sourcing, logistica, marketing, proyectos, finanzas, rh, taller,
 inventario, general. Niveles: PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED (plan maestro §2.5).
@@ -15,14 +16,20 @@ inventario, general. Niveles: PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED (plan m
 Las contraseñas SIEMPRE se piden por getpass (nunca por argumentos: quedarían en el historial
 del shell). El secreto TOTP se muestra una sola vez al enrolar y se guarda cifrado.
 Cualquier cambio de rol/áreas/contraseña/estado revoca las sesiones abiertas del usuario.
+
+Cada cambio queda en el registro de cambios de permisos (`audit-log`): quién (la variable
+MHIA_ADMIN, o el usuario del sistema), qué, a quién y el antes/después. Nunca contraseñas ni
+secretos. Con Docker: `docker compose run --rm -e MHIA_ADMIN=fernando mhia-api python -m ...`.
 """
 
 from __future__ import annotations
 
 import argparse
 import getpass
+import os
 import sys
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pipeline_ai.security import auth, clock, passwords, secretbox, totp, user_import
@@ -32,7 +39,7 @@ from pipeline_ai.security.areas import (
     format_memberships,
     parse_memberships,
 )
-from pipeline_ai.security.auth_store import User, UserExistsError, get_store
+from pipeline_ai.security.auth_store import DB_ERRORS, User, UserExistsError, get_store
 from pipeline_ai.security.roles import Role
 
 Out = Callable[[str], None]
@@ -40,6 +47,20 @@ Out = Callable[[str], None]
 
 class CliError(Exception):
     """Error de uso: se muestra el mensaje y se sale con código 1."""
+
+
+def _actor() -> str:
+    name = os.environ.get("MHIA_ADMIN", "").strip()
+    if not name:
+        try:
+            name = getpass.getuser()
+        except (KeyError, OSError):  # contenedor sin entrada en /etc/passwd
+            name = "desconocido"
+    return f"cli:{name[:64]}"
+
+
+def _audit(action: str, target: str | None, **detail: object) -> None:
+    get_store().record_admin_event(_actor(), action, target, detail, now=clock.now())
 
 
 def _find_user(username: str) -> User:
@@ -84,6 +105,7 @@ def _enroll_totp(
     store.set_totp_secret(user.id, encrypted)
     store.enable_totp(user.id, step)
     store.delete_user_sessions(user.id)
+    _audit("enrolar_totp", user.username)
     out("Segundo factor activado.")
     return True
 
@@ -112,6 +134,7 @@ def _cmd_create_user(args: argparse.Namespace, **io: object) -> int:
     except UserExistsError:
         raise CliError(f"Ya existe el usuario '{username}'.") from None
     store.set_memberships(user.id, memberships)
+    _audit("crear_usuario", username, rol=args.role, areas=format_memberships(memberships))
     out(f"Usuario '{username}' creado con rol {args.role}.")
     _report_areas(memberships, out)
 
@@ -141,6 +164,7 @@ def _cmd_reset_password(args: argparse.Namespace, **io: object) -> int:
     store.set_password_hash(user.id, passwords.hash_password(password), now=clock.now())
     store.delete_user_sessions(user.id)
     store.clear_failures(auth.throttle_key(user.username))
+    _audit("cambiar_contrasena", user.username)
     out(f"Contraseña de '{user.username}' actualizada; sus sesiones fueron cerradas.")
     return 0
 
@@ -151,6 +175,7 @@ def _cmd_set_role(args: argparse.Namespace, **io: object) -> int:
     store = get_store()
     store.set_role(user.id, args.role)
     store.delete_user_sessions(user.id)
+    _audit("cambiar_rol", user.username, antes=user.role, despues=args.role)
     out(f"Rol de '{user.username}': {args.role}. Sus sesiones fueron cerradas.")
     if args.role == Role.CONTROL_TOTAL.value and not user.totp_enabled:
         out("Aviso: control_total exige segundo factor; enrólalo con enroll-totp antes de entrar.")
@@ -179,8 +204,10 @@ def _cmd_set_areas(args: argparse.Namespace, **io: object) -> int:
     user = _find_user(args.username)
     memberships = _parse_areas(args.areas)
     store = get_store()
+    before = format_memberships(store.get_memberships(user.id))
     store.set_memberships(user.id, memberships)
     store.delete_user_sessions(user.id)
+    _audit("cambiar_areas", user.username, antes=before, despues=format_memberships(memberships))
     out(f"Áreas de '{user.username}' reemplazadas; sus sesiones fueron cerradas.")
     _report_areas(memberships, out)
     return 0
@@ -200,6 +227,15 @@ def _cmd_import_users(args: argparse.Namespace, **io: object) -> int:
         out("Nada cambió. Revisa el plan y repite con --apply para aplicarlo.")
         return 0
     counts = user_import.apply_plan(plan, store)
+    for item in plan.users:
+        if item.action != "sin cambios":
+            _audit(
+                f"importar_{'crear' if item.action == 'crear' else 'actualizar'}",
+                item.username,
+                rol=item.role,
+                areas=format_memberships(item.memberships),
+                preset=item.preset,
+            )
     out(
         f"Aplicado: {counts['creados']} creados (desactivados), "
         f"{counts['actualizados']} actualizados, {counts['sin_cambios']} sin cambios."
@@ -217,6 +253,7 @@ def _cmd_set_active(args: argparse.Namespace, *, active: bool, **io: object) -> 
     store.set_active(user.id, active)
     if not active:
         store.delete_user_sessions(user.id)
+    _audit("activar" if active else "desactivar", user.username)
     out(f"Usuario '{user.username}' {'activado' if active else 'desactivado'}.")
     return 0
 
@@ -225,6 +262,7 @@ def _cmd_unlock(args: argparse.Namespace, **io: object) -> int:
     out: Out = io["out"]  # type: ignore[assignment]
     user = _find_user(args.username)
     get_store().clear_failures(auth.throttle_key(user.username))
+    _audit("desbloquear", user.username)
     out(f"Bloqueo de '{user.username}' levantado.")
     return 0
 
@@ -250,12 +288,29 @@ def _cmd_revoke_sessions(args: argparse.Namespace, **io: object) -> int:
     out: Out = io["out"]  # type: ignore[assignment]
     store = get_store()
     if args.all:
-        out(f"Sesiones cerradas: {store.delete_all_sessions()}.")
+        closed = store.delete_all_sessions()
+        _audit("cerrar_sesiones", "*", cerradas=closed)
+        out(f"Sesiones cerradas: {closed}.")
         return 0
     if not args.username:
         raise CliError("Indica --username o --all.")
     user = _find_user(args.username)
-    out(f"Sesiones cerradas de '{user.username}': {store.delete_user_sessions(user.id)}.")
+    closed = store.delete_user_sessions(user.id)
+    _audit("cerrar_sesiones", user.username, cerradas=closed)
+    out(f"Sesiones cerradas de '{user.username}': {closed}.")
+    return 0
+
+
+def _cmd_audit_log(args: argparse.Namespace, **io: object) -> int:
+    out: Out = io["out"]  # type: ignore[assignment]
+    events = get_store().list_admin_events(args.limit)
+    if not events:
+        out("(sin cambios registrados)")
+        return 0
+    for event in events:
+        when = datetime.fromtimestamp(event.at, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+        detail = ", ".join(f"{k}={v}" for k, v in sorted(event.detail.items()))
+        out(f"{when}  {event.actor:<20} {event.action:<22} {event.target or '-':<36} {detail}")
     return 0
 
 
@@ -298,6 +353,9 @@ def _parser() -> argparse.ArgumentParser:
     p = sub.add_parser("revoke-sessions", help="cierra sesiones abiertas")
     p.add_argument("--username")
     p.add_argument("--all", action="store_true")
+
+    p = sub.add_parser("audit-log", help="muestra los cambios de usuarios y permisos recientes")
+    p.add_argument("--limit", type=int, default=50)
     return parser
 
 
@@ -323,11 +381,17 @@ def main(
         "unlock": _cmd_unlock,
         "list-users": _cmd_list_users,
         "revoke-sessions": _cmd_revoke_sessions,
+        "audit-log": _cmd_audit_log,
     }
     try:
         return handlers[args.command](args, **io)
     except (CliError, secretbox.SecretBoxError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except DB_ERRORS as exc:
+        print(
+            f"Error: no se pudo usar la base de usuarios ({type(exc).__name__}).", file=sys.stderr
+        )
         return 1
 
 

@@ -12,8 +12,10 @@ Windows y en la Mac mini (no depende de rutas ni herramientas del host):
     docker compose ... run --rm --no-deps mhia-api python -m pipeline_ai.ops.backup restore <dir> --force
 
 Qué se respalda (ver docs/PLAN-MAESTRO.md §3.5):
-  - auth.db (usuarios, sesiones, TOTP cifrado) con la API de respaldo en línea de SQLite,
-    que da una copia consistente aunque la API esté escribiendo.
+  - La base de usuarios. Con Postgres (despliegues con Docker): `auth.json` con usuarios,
+    áreas y registro de cambios, leídos en una sola transacción (sin sesiones: tras
+    restaurar todos vuelven a iniciar sesión). Con SQLite: auth.db con la API de respaldo en
+    línea, que da una copia consistente aunque la API esté escribiendo.
   - El manifest de sincronización de Drive.
   - Un snapshot de cada colección de Qdrant (vía su API REST interna).
   - manifest.json con sha256 y tamaño de cada archivo, para verificar integridad.
@@ -43,12 +45,20 @@ from pathlib import Path
 import httpx
 
 from pipeline_ai.config import settings
+from pipeline_ai.security.auth_store import (
+    DB_ERRORS,
+    AuthStore,
+    ImportDataError,
+    SqliteAuthStore,
+    get_store,
+)
 
 FORMAT_VERSION = 1
 BACKUP_PREFIX = "mhia-"
 BACKUP_NAME_RE = re.compile(r"^mhia-\d{8}T\d{6}Z$")
 MANIFEST_NAME = "manifest.json"
 AUTH_DB_NAME = "auth.db"
+AUTH_EXPORT_NAME = "auth.json"
 SYNC_MANIFEST_NAME = "sync_manifest.json"
 QDRANT_DIR = "qdrant"
 DEFAULT_DEST = os.getenv("MHIA_BACKUP_DIR", "/app/backups")
@@ -121,6 +131,37 @@ def _sqlite_integrity_ok(path: Path) -> bool:
     finally:
         conn.close()
     return bool(row) and row[0] == "ok"
+
+
+def _auth_store(explicit: AuthStore | None) -> AuthStore | None:
+    """Almacén a exportar/restaurar como JSON: el indicado o, con Postgres, el configurado.
+    None = modo archivo SQLite (auth.db)."""
+    if explicit is not None:
+        return explicit
+    return get_store() if settings.auth_backend == "postgres" else None
+
+
+def _load_auth_export(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise BackupError(f"{path.name} ilegible") from exc
+    if not isinstance(data, dict):
+        raise BackupError(f"{path.name} con forma inesperada")
+    return data
+
+
+def _check_auth_export(path: Path, expected: dict | None) -> dict[str, int]:
+    """Carga el export en una base SQLite desechable: prueba que se puede restaurar."""
+    data = _load_auth_export(path)
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            counts = SqliteAuthStore(Path(tmp) / "check.db").import_data(data, replace=False)
+        except ImportDataError as exc:
+            raise BackupError(f"{path.name}: {exc}") from exc
+    if expected is not None and counts != expected:
+        raise BackupError(f"{path.name}: conteos {counts}, el manifest dice {expected}")
+    return counts
 
 
 def _client(base_url: str, transport: httpx.BaseTransport | None) -> httpx.Client:
@@ -197,9 +238,11 @@ def create_backup(
     qdrant_url: str | None = None,
     transport: httpx.BaseTransport | None = None,
     now: float | None = None,
+    auth_store: AuthStore | None = None,
 ) -> Path:
     """Crea un respaldo completo y devuelve su directorio final."""
     paths = paths or default_paths()
+    store = _auth_store(auth_store)
     dest_root.mkdir(parents=True, exist_ok=True)
     final = dest_root / f"{BACKUP_PREFIX}{_utc_stamp(now)}"
     if final.exists():
@@ -213,7 +256,16 @@ def create_backup(
             "qdrant": {},
             "skipped": [],
         }
-        if paths.auth_db.exists():
+        if store is not None:
+            data = store.export_data()
+            (staging / AUTH_EXPORT_NAME).write_text(
+                json.dumps(data, ensure_ascii=False, sort_keys=True), encoding="utf-8"
+            )
+            manifest["auth"] = {
+                "backend": store.backend,
+                "counts": {t: len(data[t]) for t in ("users", "memberships", "admin_audit")},
+            }
+        elif paths.auth_db.exists():
             _sqlite_backup(paths.auth_db, staging / AUTH_DB_NAME)
         else:
             manifest["skipped"].append(AUTH_DB_NAME)
@@ -286,6 +338,12 @@ def verify_backup(backup_dir: Path) -> list[str]:
     auth = backup_dir / AUTH_DB_NAME
     if AUTH_DB_NAME in listed and auth.is_file() and not _sqlite_integrity_ok(auth):
         problems.append("auth.db no pasa PRAGMA integrity_check")
+    export = backup_dir / AUTH_EXPORT_NAME
+    if AUTH_EXPORT_NAME in listed and export.is_file() and not problems:
+        try:
+            _check_auth_export(export, (manifest.get("auth") or {}).get("counts"))
+        except BackupError as exc:
+            problems.append(str(exc))
     return problems
 
 
@@ -303,6 +361,9 @@ def drill(
         raise BackupError("Respaldo con problemas: " + "; ".join(problems))
     manifest = _load_manifest(backup_dir)
     report: dict = {"backup": backup_dir.name, "collections": {}}
+    if AUTH_EXPORT_NAME in manifest["files"]:
+        # verify_backup ya lo cargó en una base desechable; el conteo va al informe.
+        report["auth"] = _check_auth_export(backup_dir / AUTH_EXPORT_NAME, None)
     with _client(qdrant_url or settings.qdrant_url, transport) as client:
         for collection, meta in manifest["qdrant"].items():
             _check_collection_name(collection)
@@ -331,21 +392,49 @@ def restore_backup(
     paths: Paths | None = None,
     qdrant_url: str | None = None,
     transport: httpx.BaseTransport | None = None,
+    auth_store: AuthStore | None = None,
 ) -> dict:
-    """Restaura auth.db, el manifest de Drive y las colecciones de Qdrant.
+    """Restaura la base de usuarios, el manifest de Drive y las colecciones de Qdrant.
 
     Destructivo: reemplaza los datos actuales. Exige force=True y debe correr con la API
-    detenida (si no, la API seguiría usando la base anterior abierta)."""
+    detenida (con Postgres, el servicio postgres sí debe estar arriba). Un respaldo viejo
+    con auth.db también se puede restaurar sobre Postgres."""
     if not force:
         raise BackupError("La restauración reemplaza los datos actuales: repite con --force.")
     problems = verify_backup(backup_dir)
     if problems:
         raise BackupError("Respaldo con problemas: " + "; ".join(problems))
     paths = paths or default_paths()
+    store = _auth_store(auth_store)
     manifest = _load_manifest(backup_dir)
     restored: dict = {"files": [], "collections": []}
+    files = manifest["files"]
+    if store is not None and (AUTH_EXPORT_NAME in files or AUTH_DB_NAME in files):
+        if AUTH_EXPORT_NAME in files:
+            data = _load_auth_export(backup_dir / AUTH_EXPORT_NAME)
+            source = AUTH_EXPORT_NAME
+        else:  # respaldo anterior a Postgres: se lee de una copia, nunca del respaldo
+            with tempfile.TemporaryDirectory() as tmp:
+                copy = Path(tmp) / AUTH_DB_NAME
+                shutil.copy2(backup_dir / AUTH_DB_NAME, copy)
+                data = SqliteAuthStore(copy).export_data()
+            source = AUTH_DB_NAME
+        try:
+            restored["auth"] = store.import_data(data, replace=True)
+        except ImportDataError as exc:
+            raise BackupError(f"{source}: {exc}") from exc
+        # La restauración deshace los cambios posteriores al respaldo: queda constancia.
+        store.record_admin_event(
+            "sistema", "restaurar_respaldo", None, {"respaldo": backup_dir.name, "origen": source}
+        )
+        restored["files"].append(source)
+    elif AUTH_EXPORT_NAME in files:
+        raise BackupError(
+            "El respaldo trae auth.json (Postgres) y la base configurada es un archivo SQLite: "
+            "restaura con AUTH_BACKEND=postgres."
+        )
     for name, target in ((AUTH_DB_NAME, paths.auth_db), (SYNC_MANIFEST_NAME, paths.sync_manifest)):
-        if name not in manifest["files"]:
+        if name not in files or (name == AUTH_DB_NAME and store is not None):
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_name(f".{target.name}.restore-tmp")
@@ -430,8 +519,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "prune":
             for path in prune(dest_root, args.keep):
                 print(f"Borrado: {path.name}")
-    except (BackupError, httpx.HTTPError, sqlite3.Error, OSError) as exc:
+    except (BackupError, httpx.HTTPError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    except DB_ERRORS as exc:
+        print(f"ERROR: base de usuarios no disponible ({type(exc).__name__})", file=sys.stderr)
         return 1
     return 0
 

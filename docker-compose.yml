@@ -16,8 +16,8 @@
 # actualizaciones; se prueban en la laptop antes de llegar a la Mac.
 #
 # Red y puertos (ver SECURITY.md):
-#   - Qdrant y Ollama NO publican puertos al host: solo son alcanzables por
-#     mhia-api dentro de la red interna "backend".
+#   - Qdrant, Postgres y Ollama NO publican puertos al host: solo son
+#     alcanzables por mhia-api dentro de la red interna "backend".
 #   - Solo mhia-api (8000) y web (3000) publican puerto, y SOLO en 127.0.0.1.
 #     El acceso remoto lo da Tailscale en el host (`tailscale serve`), nunca
 #     un puerto abierto a la LAN ni a internet.
@@ -30,7 +30,7 @@ x-base: &base
     - no-new-privileges:true
 
 # api y web corren como usuario sin privilegios: además se les quitan todas
-# las capabilities de Linux. Qdrant (imagen de terceros) solo recibe `base`.
+# las capabilities de Linux. Qdrant y Postgres (imágenes de terceros) solo reciben `base`.
 x-hardening: &hardening
   <<: *base
   cap_drop:
@@ -60,6 +60,29 @@ services:
       timeout: 5s
       retries: 5
 
+  postgres:
+    <<: *base
+    # Usuarios, áreas, sesiones y registro de cambios de permisos (security/auth_store.py).
+    # Mayor fijo (18): subir de mayor exige volcar y recargar la base (ver DEPLOYMENT.md).
+    image: postgres:18.6-alpine@sha256:123b17998ccaf47e53b502e8c6a1e79afd8f579c6f3eec83c563da026f957395
+    container_name: mhia-postgres
+    # Sin "ports:" y SIN env_file: solo recibe sus tres variables, nunca el resto del .env.
+    # Sin POSTGRES_PASSWORD la imagen se niega a arrancar (falla explícita).
+    environment:
+      - POSTGRES_DB=mhia
+      - POSTGRES_USER=mhia
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=scram-sha-256
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mhia -d mhia"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   mhia-api:
     <<: *hardening
     build:
@@ -70,17 +93,23 @@ services:
       - .env
     environment:
       - QDRANT_URL=http://qdrant:6333
+      - AUTH_BACKEND=postgres
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=mhia
+      - POSTGRES_USER=mhia
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
       - ./credentials:/app/credentials:ro
-      - ./data:/app/data # manifest de sync de Drive y auth.db (usuarios y sesiones)
+      - ./data:/app/data # manifest de sync de Drive (y el auth.db anterior, que se migra solo)
       - ./backups:/app/backups # respaldos (python -m pipeline_ai.ops.backup), fuera de git
     read_only: true
     tmpfs:
       - /tmp
     depends_on:
       qdrant:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     networks:
       - backend
@@ -110,8 +139,8 @@ services:
       - edge
 
 networks:
-  # backend: api + qdrant (+ ollama en la laptop). edge: web + api.
-  # Así web nunca puede resolver ni alcanzar Qdrant ni Ollama.
+  # backend: api + qdrant + postgres (+ ollama en la laptop). edge: web + api.
+  # Así web nunca puede resolver ni alcanzar Qdrant, Postgres ni Ollama.
   backend:
     driver: bridge
   edge:
@@ -119,3 +148,4 @@ networks:
 
 volumes:
   qdrant_data:
+  postgres_data:
