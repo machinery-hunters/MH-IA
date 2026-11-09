@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Respaldo diario a las 02:30 (crea, verifica y conserva los 14 más recientes en
+  __MHIA_REPO__/backups). La copia al disco externo / fuera de oficina se agrega en
+  F0 según docs/PLAN-MAESTRO.md §3.5.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.machineryhunters.mhia.backup</string>
+  <key>UserName</key>
+  <string>__MHIA_USER__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__MHIA_REPO__/scripts/mac/mhia.sh</string>
+    <string>backup</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__MHIA_HOME__</string>
+    <key>PATH</key>
+    <string>__BREW_PREFIX__/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>2</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__MHIA_HOME__/Library/Logs/mhia/backup.log</string>
+  <key>StandardErrorPath</key>
+  <string>__MHIA_HOME__/Library/Logs/mhia/backup.log</string>
+</dict>
+</plist>

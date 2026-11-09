@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[3]
 COMPOSE_FILES = [
     "docker-compose.yml",
     "docker-compose.gpu.yml",
-    "docker-compose.mac.yml",
+    "docker-compose.host-ollama.yml",
     "docker-compose.dev.yml",
 ]
 

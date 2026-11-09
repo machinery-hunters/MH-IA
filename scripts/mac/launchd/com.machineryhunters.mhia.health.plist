@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Chequeo de salud cada 5 minutos: API, Ollama, contenedores y disco. Avisa solo
+  cuando cambia el estado (sano -> falla y falla -> sano) a MHIA_ALERT_URL si está
+  definido en .env.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.machineryhunters.mhia.health</string>
+  <key>UserName</key>
+  <string>__MHIA_USER__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__MHIA_REPO__/scripts/mac/health.sh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__MHIA_HOME__</string>
+    <key>PATH</key>
+    <string>__BREW_PREFIX__/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>StandardOutPath</key>
+  <string>__MHIA_HOME__/Library/Logs/mhia/health.log</string>
+  <key>StandardErrorPath</key>
+  <string>__MHIA_HOME__/Library/Logs/mhia/health.log</string>
+</dict>
+</plist>

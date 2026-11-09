@@ -3,12 +3,17 @@
 # NO define "ollama" aquí porque su acceso a GPU cambia entre plataformas;
 # se activa vía overrides:
 #
-#   Laptop (Windows/WSL2, NVIDIA):
+#   Modo por defecto en AMBOS equipos (Ollama NATIVO en el host):
+#     docker compose -f docker-compose.yml -f docker-compose.host-ollama.yml up -d --build
+#     - Mac mini M5 Pro: único modo soportado (Metal no pasa a contenedores).
+#     - Laptop Windows: mismo modo, para que dev y producción sean iguales.
+#   Alternativa en la laptop (Ollama en contenedor con GPU NVIDIA):
 #     docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
-#   Mac mini M5 Pro (Ollama NATIVO en el host):
-#     docker compose -f docker-compose.yml -f docker-compose.mac.yml up -d --build
 #   Desarrollo con recarga de código (se suma a cualquiera de los dos):
 #     ... -f docker-compose.dev.yml
+#
+# Imágenes: fijadas por versión Y digest (sha256). Dependabot propone las
+# actualizaciones; se prueban en la laptop antes de llegar a la Mac.
 #
 # Red y puertos (ver SECURITY.md):
 #   - Qdrant y Ollama NO publican puertos al host: solo son alcanzables por
@@ -37,7 +42,7 @@ services:
     <<: *base
     # Misma versión que qdrant-client (requirements.txt): el cliente exige mismo major y
     # diferencia de minor <= 1. Al subir uno, sube el otro (y reindexa si hay datos).
-    image: qdrant/qdrant:v1.19.1
+    image: qdrant/qdrant:v1.19.1@sha256:12364fe851b9f17356fc88189fc06d1b521262e04659ec7345975b00c9246a10
     container_name: mhia-qdrant
     # Sin "ports:": inalcanzable desde el host y la LAN. Para inspeccionar
     # manualmente, usa `docker compose exec` o un override local temporal.
@@ -70,6 +75,7 @@ services:
     volumes:
       - ./credentials:/app/credentials:ro
       - ./data:/app/data # manifest de sync de Drive y auth.db (usuarios y sesiones)
+      - ./backups:/app/backups # respaldos (python -m pipeline_ai.ops.backup), fuera de git
     read_only: true
     tmpfs:
       - /tmp

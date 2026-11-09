@@ -1,0 +1,34 @@
+# ─────────────────────────────────────────────────────────────────────────
+# OVERRIDE: Ollama NATIVO en el host (modo por defecto en Mac y Windows)
+#
+# Mac mini M5 Pro (producción): Ollama no se containeriza porque la GPU de
+# Apple Silicon (Metal) no pasa a contenedores Linux. Ollama corre como
+# servicio launchd (ver scripts/mac/README.md) y escucha SOLO en 127.0.0.1.
+#
+# Laptop Windows (desarrollo): el mismo modo, con Ollama para Windows
+# instalado de forma nativa (usa la RTX por CUDA sin pasar por WSL2). Así el
+# stack que se prueba es exactamente el que corre en la Mac.
+#
+# Pre-requisito en el host:
+#   ollama pull llama3.1:8b
+#   ollama pull nomic-embed-text
+#   (versiones esperadas en scripts/ollama-models.txt; el doctor las compara)
+#
+# NO cambies OLLAMA_HOST a 0.0.0.0: Ollama no tiene autenticación.
+#
+# Cómo llega el contenedor al Ollama del host:
+#   - Docker Desktop (Windows/Mac): host.docker.internal reenvía al
+#     127.0.0.1 del host.
+#   - Colima (Mac mini): si el doctor no alcanza Ollama, define en .env
+#     MHIA_HOST_GATEWAY=192.168.5.2 (la IP del host dentro de la VM de Lima).
+#
+# Uso:
+#   docker compose -f docker-compose.yml -f docker-compose.host-ollama.yml up -d --build
+# ─────────────────────────────────────────────────────────────────────────
+
+services:
+  mhia-api:
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:${MHIA_HOST_GATEWAY:-host-gateway}"

@@ -43,3 +43,11 @@ services/pipeline_ai/lab/real_golden.json
 **/data/*.db-wal
 **/data/*.db-shm
 **/data/*.db-journal
+
+# Respaldos locales (contienen datos del negocio)
+backups/*
+!backups/.gitkeep
+
+# Importaciones con datos personales (por ejemplo, la lista de usuarios): nunca a git
+**/data/*.csv
+**/data/*.xlsx

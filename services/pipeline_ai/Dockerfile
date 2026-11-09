@@ -1,4 +1,5 @@
-FROM python:3.12-slim
+# Imagen base fijada por digest (multi-arquitectura: amd64 en la laptop, arm64 en la Mac).
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -6,13 +7,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+# Dependencias exactas con hash (requirements.lock): la misma versión de cada
+# paquete en la laptop, en el CI y en la Mac. Regenerar: make lock / dev.ps1 lock
+COPY requirements.lock .
+RUN pip install --no-deps --require-hashes -r requirements.lock
 
 # Usuario sin privilegios: el contenedor nunca corre como root.
 RUN useradd --system --uid 10001 --no-create-home mhia \
-    && mkdir -p /app/data /app/credentials \
-    && chown -R mhia /app/data
+    && mkdir -p /app/data /app/credentials /app/backups \
+    && chown -R mhia /app/data /app/backups
 
 COPY pipeline_ai ./pipeline_ai
 COPY eval ./eval

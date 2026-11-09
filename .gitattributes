@@ -1,2 +1,25 @@
+# Saltos de línea normalizados a LF en el repo y en la copia de trabajo, en Windows
+# y en macOS por igual (los scripts .sh y los hooks fallan con CRLF en la Mac).
 * text=auto eol=lf
+*.sh text eol=lf
+.githooks/* text eol=lf
+*.plist text eol=lf
+# Windows PowerShell 5.1 lee como UTF-8 solo si el archivo trae BOM (las pruebas lo exigen);
+# LF funciona igual en 5.1 y en PowerShell 7.
+*.ps1 text eol=lf
 *.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binarios: nunca se convierten ni se diferencian como texto.
+*.docx binary
+*.xlsx binary
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.snapshot binary
+*.db binary

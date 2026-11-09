@@ -1,9 +1,11 @@
 # ─────────────────────────────────────────────────────────────────────────
-# OVERRIDE: Laptop de desarrollo/pruebas
+# OVERRIDE OPCIONAL: Laptop de desarrollo con Ollama EN CONTENEDOR
 # Acer Predator Helios Neo 16S AI · Core Ultra 9 · RTX 5070 Ti (12GB VRAM) · 32GB RAM
 #
-# Aquí SÍ containerizamos Ollama porque en Windows/WSL2 Docker puede pasar la
-# GPU NVIDIA al contenedor (a diferencia de Mac).
+# El modo por defecto es docker-compose.host-ollama.yml (Ollama nativo, igual
+# que la Mac). Este override queda para probar Ollama aislado en un contenedor
+# con la GPU NVIDIA por WSL2 (algo que la Mac no puede hacer).
+#   .\scripts\dev.ps1 up -OllamaMode docker
 #
 # Requisitos previos en el host:
 #   - Driver NVIDIA para Windows actualizado (>= 550.x, RTX 50-series)
@@ -23,7 +25,8 @@
 services:
 
   ollama:
-    image: ollama/ollama:latest # TODO: fijar a una versión probada (ver SECURITY.md)
+    # Misma versión que se instala nativa en la Mac y en Windows (scripts/ollama-models.txt).
+    image: ollama/ollama:0.40.15@sha256:0e59999e0e8f9fd4e704bd788a89b7e4cad399367fb1365f8c102ac662288761
     container_name: mhia-ollama
     restart: unless-stopped
     security_opt:
