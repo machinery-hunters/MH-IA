@@ -6,42 +6,48 @@ GET /api/v1/me y nunca los deduce por su cuenta: ocultar un botón en Next.js
 es UX, no seguridad. Cada endpoint exige un permiso con
 `api.deps.require_permission`.
 
-Roles iniciales (nombres y reparto por confirmar con Dirección):
-  consulta       solo consulta fuentes no sensibles
-  lider          además puede consultar fuentes confidenciales
-  configuracion  además puede ver/configurar conectores
-  control_total  todo, incluida la infraestructura (rol más restringido;
+El rol dice qué puede HACER una persona; qué puede VER lo deciden sus membresías por área
+(`security.areas`, plan maestro §2.5). Ningún rol da acceso a datos por sí mismo:
+`control_total` administra la infraestructura y, sin membresías, no lee ningún documento.
+
+Roles:
+  consulta       consulta en sus áreas
+  lider          consulta en sus áreas (y, más adelante, ve el estado de sus fuentes)
+  direccion      consulta en sus áreas (por defecto todas, ver security.presets)
+  configuracion  además administra conectores (sin ver valores de secretos)
+  control_total  todo lo de configuración más la infraestructura (rol más restringido;
                  exige segundo factor, ver SECURITY.md)
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from enum import Enum
 
 from pipeline_ai.privacy.sensitivity import Sensitivity
+from pipeline_ai.security.areas import Area
 
 
 class Role(str, Enum):  # noqa: UP042 - compatible con 3.10 (validación local) y 3.12
     CONSULTA = "consulta"
     LIDER = "lider"
+    DIRECCION = "direccion"
     CONFIGURACION = "configuracion"
     CONTROL_TOTAL = "control_total"
 
 
 class Permission(str, Enum):  # noqa: UP042
     QUERY = "query"
-    QUERY_CONFIDENTIAL = "query_confidential"
     CONFIGURE_CONNECTORS = "configure_connectors"
     ADMIN_SYSTEM = "admin_system"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
     Role.CONSULTA: frozenset({Permission.QUERY}),
-    Role.LIDER: frozenset({Permission.QUERY, Permission.QUERY_CONFIDENTIAL}),
-    Role.CONFIGURACION: frozenset(
-        {Permission.QUERY, Permission.QUERY_CONFIDENTIAL, Permission.CONFIGURE_CONNECTORS}
-    ),
+    Role.LIDER: frozenset({Permission.QUERY}),
+    Role.DIRECCION: frozenset({Permission.QUERY}),
+    Role.CONFIGURACION: frozenset({Permission.QUERY, Permission.CONFIGURE_CONNECTORS}),
     Role.CONTROL_TOTAL: frozenset(Permission),
 }
 
@@ -51,6 +57,8 @@ class Principal:
     user_id: str
     role: Role
     username: str = ""
+    # Qué puede ver, por área (vacío = nada). Sale SIEMPRE de la base, nunca del cliente.
+    memberships: Mapping[Area, Sensitivity] = field(default_factory=dict)
 
     @property
     def permissions(self) -> frozenset[Permission]:
@@ -69,14 +77,16 @@ def has_permission(role: Role | str | None, permission: Permission) -> bool:
     return permission in permissions_for(role)
 
 
-def can_view(role: Role | str | None, level: Sensitivity) -> bool:
-    """¿Puede este rol ver datos con esta sensibilidad?
-
-    PUBLIC/INTERNAL -> QUERY; CONFIDENTIAL -> QUERY_CONFIDENTIAL;
-    RESTRICTED -> solo ADMIN_SYSTEM.
-    """
-    if level >= Sensitivity.RESTRICTED:
-        return has_permission(role, Permission.ADMIN_SYSTEM)
-    if level >= Sensitivity.CONFIDENTIAL:
-        return has_permission(role, Permission.QUERY_CONFIDENTIAL)
-    return has_permission(role, Permission.QUERY)
+def principal_view(principal: Principal) -> dict[str, object]:
+    """Lo que la GUI recibe de /login y /me: permisos y áreas visibles (sin niveles de otras
+    personas ni nada que el usuario no tenga ya)."""
+    return {
+        "user_id": principal.user_id,
+        "username": principal.username,
+        "role": principal.role.value,
+        "permissions": sorted(p.value for p in principal.permissions),
+        "areas": {
+            area.value: level.name
+            for area, level in sorted(principal.memberships.items(), key=lambda kv: kv[0].value)
+        },
+    }

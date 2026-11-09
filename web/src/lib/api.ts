@@ -11,17 +11,17 @@
 
 import type { QueryStatus } from "@/lib/query-helpers";
 
-export type Permission =
-  | "query"
-  | "query_confidential"
-  | "configure_connectors"
-  | "admin_system";
+export type Permission = "query" | "configure_connectors" | "admin_system";
+
+export type SensitivityLevel = "PUBLIC" | "INTERNAL" | "CONFIDENTIAL" | "RESTRICTED";
 
 export interface Me {
   user_id: string;
   username: string;
   role: string;
   permissions: Permission[];
+  /** Áreas que el usuario puede consultar y su nivel máximo (solo informativo). */
+  areas: Record<string, SensitivityLevel>;
 }
 
 export interface ConnectorStatus {

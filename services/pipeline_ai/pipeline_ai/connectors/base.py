@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from pipeline_ai.privacy.sensitivity import Sensitivity
+from pipeline_ai.security.areas import Area
 from pipeline_ai.sources import Citation
 
 
@@ -26,6 +27,9 @@ class ConnectorSpec:
     name: str  # id estable: "erp", "crm", "drive", "firestore"
     display_name: str
     default_sensitivity: Sensitivity
+    # Áreas cuyos datos expone la fuente: para usarla hace falta membresía en alguna de
+    # ellas con nivel suficiente (security.areas.can_access). Sin áreas, nadie la usa.
+    areas: tuple[Area, ...] = ()
     # Atributos de `settings` que deben estar presentes para que el conector
     # funcione. Si falta alguno -> el sub-agente responde NOT_CONFIGURED sin
     # intentar conectarse (y sin tumbar la petición).

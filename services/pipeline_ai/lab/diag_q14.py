@@ -6,7 +6,7 @@ import asyncio
 import sys
 import time
 
-import _env  # noqa: F401  (efecto: fija QDRANT/OLLAMA antes de importar pipeline_ai)
+import _env  # efecto: fija QDRANT/OLLAMA antes de importar pipeline_ai
 
 # isort: split
 from pipeline_ai.nodes.ollama_node import ollama_anonymizer_node
@@ -30,7 +30,12 @@ async def step(name: str, coro):
 
 async def main() -> None:
     print(f"consulta: {QUERY!r}")
-    state: dict = {"messages": [], "query": QUERY, "session_id": "diag"}
+    state: dict = {
+        "messages": [],
+        "query": QUERY,
+        "session_id": "diag",
+        "memberships": _env.lab_memberships("control_total"),
+    }
 
     out = await step("router", router_node(state))
     if out is None:

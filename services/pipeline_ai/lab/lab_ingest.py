@@ -21,7 +21,7 @@ from qdrant_client import QdrantClient
 from pipeline_ai.config import settings
 from pipeline_ai.embeddings import TaskPrefixedOllamaEmbeddings
 from pipeline_ai.ingestion.chunker import chunk_file
-from pipeline_ai.ingestion.domain_mapping import infer_domain_from_folder_path
+from pipeline_ai.ingestion.domain_mapping import infer_area_from_folder_path
 from pipeline_ai.ingestion.drive_client import DriveFile
 from pipeline_ai.ingestion.loaders import extract_text
 from pipeline_ai.retrieval.collection import build_point, create_collection
@@ -95,11 +95,11 @@ def main() -> None:
         client.upsert(collection_name=settings.qdrant_collection, points=points)
         total_chunks += len(points)
         log.info(
-            "Indexado: %-45s %2d chunks  carpeta=%-14s dominio=%s",
+            "Indexado: %-45s %2d chunks  carpeta=%-14s area=%s",
             file.name,
             len(points),
             "/".join(file.folder_path) or "(raiz)",
-            infer_domain_from_folder_path(file.folder_path),
+            infer_area_from_folder_path(file.folder_path),
         )
 
     log.info("Listo: %d archivos, %d chunks.", len(files), total_chunks)

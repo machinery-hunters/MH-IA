@@ -147,7 +147,13 @@ def authenticate(username: str, password: str, totp_code: str | None = None) -> 
         absolute_s=settings.session_absolute_s,
     )
     _audit("login_ok", user_id=user.id, role=user.role, mfa=mfa_ok)
-    info = SessionInfo(user_id=user.id, username=user.username, role=user.role, mfa=mfa_ok)
+    info = SessionInfo(
+        user_id=user.id,
+        username=user.username,
+        role=user.role,
+        mfa=mfa_ok,
+        memberships=get_store().get_memberships(user.id),
+    )
     return LoginResult("ok", token=token, user=info)
 
 

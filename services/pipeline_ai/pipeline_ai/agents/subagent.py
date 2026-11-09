@@ -24,7 +24,7 @@ from collections.abc import Awaitable, Callable
 from pipeline_ai.config import settings
 from pipeline_ai.connectors.base import Connector
 from pipeline_ai.privacy.sensitivity import effective_sensitivity, requires_anonymization
-from pipeline_ai.security.roles import can_view
+from pipeline_ai.security.areas import Memberships, can_access
 from pipeline_ai.sources import SourceResult, SourceStatus
 
 log = logging.getLogger("mhia.subagent")
@@ -42,7 +42,7 @@ async def run_subagent(
     connector: Connector,
     query: str,
     *,
-    role: str | None,
+    memberships: Memberships,
     anonymize: Anonymizer,
 ) -> SourceResult:
     spec = connector.spec
@@ -58,12 +58,12 @@ async def run_subagent(
             detail="faltan credenciales",
         )
 
-    if not can_view(role, level):
+    if not can_access(memberships, spec.areas, level):
         return SourceResult(
             source=spec.name,
             status=SourceStatus.FORBIDDEN,
             sensitivity=int(level),
-            detail="rol sin permiso para esta fuente",
+            detail="sin permiso de área para esta fuente",
         )
 
     timeout = float(getattr(settings, spec.timeout_setting, settings.timeout_global_s))
@@ -92,14 +92,14 @@ async def run_subagent(
     if extraction.sensitivity is not None:
         level = effective_sensitivity(level, extraction.sensitivity)
 
-    # Un rol que puede ver la fuente por defecto pero no este dato en
-    # particular (p.ej. documento RESTRICTED) tampoco lo recibe.
-    if not can_view(role, level):
+    # Quien puede ver la fuente por defecto pero no este dato en particular
+    # (p.ej. documento RESTRICTED) tampoco lo recibe.
+    if not can_access(memberships, spec.areas, level):
         return SourceResult(
             source=spec.name,
             status=SourceStatus.FORBIDDEN,
             sensitivity=int(level),
-            detail="rol sin permiso para este dato",
+            detail="sin permiso de área para este dato",
             elapsed_ms=_elapsed_ms(start),
         )
 

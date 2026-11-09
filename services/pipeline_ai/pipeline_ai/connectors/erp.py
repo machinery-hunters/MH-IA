@@ -18,6 +18,7 @@ import httpx
 from pipeline_ai.config import settings
 from pipeline_ai.connectors.base import ConnectorSpec, RawExtraction
 from pipeline_ai.privacy.sensitivity import Sensitivity
+from pipeline_ai.security.areas import Area
 
 
 @lru_cache
@@ -40,6 +41,7 @@ class ErpConnector:
         name="erp",
         display_name="ERP (Frappe/ERPNext)",
         default_sensitivity=Sensitivity.CONFIDENTIAL,
+        areas=(Area.INVENTARIO, Area.FINANZAS),
         required_settings=("erpnext_base_url", "erpnext_api_key", "erpnext_api_secret"),
         timeout_setting="timeout_erp_s",
         description="Registros financieros y operativos del ERP.",

@@ -1,4 +1,6 @@
-"""Chunker: tablas por filas con encabezado repetido, texto por caracteres, metadata y dominio."""
+"""Chunker: tablas por filas con encabezado repetido, texto por caracteres, metadata y área."""
+
+import pytest
 
 from pipeline_ai.ingestion.chunker import chunk_file, split_table
 from pipeline_ai.ingestion.drive_client import DriveFile
@@ -89,19 +91,26 @@ def test_plain_text_is_not_treated_as_a_table():
     assert sum(d.page_content.startswith("Párrafo 0") for d in docs) == 1
 
 
-def test_metadata_carries_the_domain_the_source_and_stable_chunk_ids():
+def test_metadata_carries_the_area_its_level_the_source_and_stable_chunk_ids():
     docs = chunk_file(_file(), _table(200))
 
     assert [d.metadata["chunk_id"] for d in docs] == [f"f1::{i}" for i in range(len(docs))]
-    assert {d.metadata["domain"] for d in docs} == {"proyectos"}
+    assert {d.metadata["area"] for d in docs} == {"proyectos"}
+    assert {d.metadata["sensitivity"] for d in docs} == {2}
+    assert all("domain" not in d.metadata for d in docs)
     assert {d.metadata["source"] for d in docs} == {"Google Drive: Hoja.gsheet"}
     assert {d.metadata["department"] for d in docs} == {"Proyectos"}
 
 
-def test_a_file_in_an_unrecognised_folder_gets_the_fail_closed_domain():
+def test_rh_files_are_restricted():
     docs = chunk_file(_file(folder=("Recursos Humanos",)), _table(5))
 
-    assert {d.metadata["domain"] for d in docs} == {"sin_clasificar"}
+    assert {(d.metadata["area"], d.metadata["sensitivity"]) for d in docs} == {("rh", 3)}
+
+
+def test_a_file_in_an_unrecognised_folder_is_never_chunked():
+    with pytest.raises(ValueError, match="sin área"):
+        chunk_file(_file(folder=("Archivo muerto",)), _table(5))
 
 
 def test_empty_text_gives_no_chunks():

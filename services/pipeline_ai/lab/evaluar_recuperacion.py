@@ -45,7 +45,9 @@ async def _run(role: str, golden: Path) -> list[dict]:
     rows = []
     for q in questions:
         started = time.perf_counter()
-        out = await retriever_node({"query": q["query"], "role": role})
+        out = await retriever_node(
+            {"query": q["query"], "role": role, "memberships": _env.lab_memberships(role)}
+        )
         elapsed = time.perf_counter() - started
         got = sorted({_short(c["source"]) for c in out.get("citations", [])})
         rows.append(

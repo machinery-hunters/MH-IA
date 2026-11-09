@@ -353,6 +353,13 @@ Criterios detrás de esta propuesta:
 
 Esta tabla es el valor por defecto de la fase 1; **conviene que Dirección la
 revise** antes de importar el Excel (sección 9.2).
+
+> **Estado (9 nov 2026):** implementado en el bloque 2 con la base de usuarios
+> actual (SQLite, `auth.db`): áreas y niveles, filtro en Qdrant y en Python,
+> RESTRICTED sin salida a Claude, rol `direccion`, presets por puesto
+> (`security/presets.py`) e importación con `manage import-users`. Pendientes:
+> Postgres (PR aparte), área por correo del dueño, permiso temporal auditado y
+> la validación de esta tabla por Dirección.
 - **Por qué no OAuth por usuario como base:** se discutió el 20 de octubre. Da a
   MH IA acceso a archivos personales, complica la búsqueda semántica y no
   resuelve el permiso por área. Se reserva para el futuro, solo en sistemas

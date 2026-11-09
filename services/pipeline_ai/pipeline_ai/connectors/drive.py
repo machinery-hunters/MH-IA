@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from pipeline_ai.connectors.base import ConnectorSpec, RawExtraction
 from pipeline_ai.privacy.sensitivity import Sensitivity
+from pipeline_ai.security.areas import Area
 
 
 class DriveConnector:
@@ -21,6 +22,7 @@ class DriveConnector:
         name="drive",
         display_name="Google Drive",
         default_sensitivity=Sensitivity.INTERNAL,
+        areas=(Area.GENERAL,),
         required_settings=("google_drive_folder_id",),
         timeout_setting="timeout_drive_s",
         description="Documentos por departamento indexados en Qdrant.",

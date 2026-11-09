@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from pipeline_ai.api.deps import session_cookie_name
 from pipeline_ai.config import settings
 from pipeline_ai.security import auth
-from pipeline_ai.security.roles import Principal, Role
+from pipeline_ai.security.roles import Principal, Role, principal_view
 
 log = logging.getLogger("mhia.auth")
 
@@ -61,13 +61,9 @@ def login(body: LoginRequest, response: Response) -> object:
             user_id=result.user.user_id,
             role=Role(result.user.role),
             username=result.user.username,
+            memberships=result.user.memberships,
         )
-        return {
-            "user_id": principal.user_id,
-            "username": principal.username,
-            "role": principal.role.value,
-            "permissions": sorted(p.value for p in principal.permissions),
-        }
+        return principal_view(principal)
     if result.status == "locked":
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,

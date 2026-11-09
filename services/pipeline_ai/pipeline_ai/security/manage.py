@@ -2,13 +2,19 @@
 Administración de usuarios desde el servidor (no hay registro público).
 
     python -m pipeline_ai.security.manage gen-key
-    python -m pipeline_ai.security.manage create-user --username ana --role lider
+    python -m pipeline_ai.security.manage create-user --username ana --role lider \
+        --areas "general:INTERNAL, comercial:CONFIDENTIAL"
+    python -m pipeline_ai.security.manage set-areas --username ana --areas "comercial:CONFIDENTIAL"
+    python -m pipeline_ai.security.manage import-users --file /app/data/usuarios.xlsx [--apply]
     python -m pipeline_ai.security.manage enroll-totp --username ana
     python -m pipeline_ai.security.manage list-users
 
+Áreas: direccion, comercial, sourcing, logistica, marketing, proyectos, finanzas, rh, taller,
+inventario, general. Niveles: PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED (plan maestro §2.5).
+
 Las contraseñas SIEMPRE se piden por getpass (nunca por argumentos: quedarían en el historial
 del shell). El secreto TOTP se muestra una sola vez al enrolar y se guarda cifrado.
-Cualquier cambio de rol/contraseña/estado revoca las sesiones abiertas del usuario.
+Cualquier cambio de rol/áreas/contraseña/estado revoca las sesiones abiertas del usuario.
 """
 
 from __future__ import annotations
@@ -17,8 +23,15 @@ import argparse
 import getpass
 import sys
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
-from pipeline_ai.security import auth, clock, passwords, secretbox, totp
+from pipeline_ai.security import auth, clock, passwords, secretbox, totp, user_import
+from pipeline_ai.security.areas import (
+    AREA_MIN_SENSITIVITY,
+    InvalidMembership,
+    format_memberships,
+    parse_memberships,
+)
 from pipeline_ai.security.auth_store import User, UserExistsError, get_store
 from pipeline_ai.security.roles import Role
 
@@ -89,14 +102,18 @@ def _cmd_create_user(args: argparse.Namespace, **io: object) -> int:
     username = auth.normalize_username(args.username)
     if username is None:
         raise CliError("Usuario inválido: de 3 a 64 caracteres entre a-z, 0-9, punto, guion, @.")
+    memberships = _parse_areas(args.areas)
     password = _ask_new_password(username, getpass_fn)
+    store = get_store()
     try:
-        user = get_store().create_user(
+        user = store.create_user(
             username, passwords.hash_password(password), args.role, now=clock.now()
         )
     except UserExistsError:
         raise CliError(f"Ya existe el usuario '{username}'.") from None
+    store.set_memberships(user.id, memberships)
     out(f"Usuario '{username}' creado con rol {args.role}.")
+    _report_areas(memberships, out)
 
     if args.role == Role.CONTROL_TOTAL.value:
         out("El rol control_total exige segundo factor: se enrola ahora.")
@@ -140,6 +157,59 @@ def _cmd_set_role(args: argparse.Namespace, **io: object) -> int:
     return 0
 
 
+def _parse_areas(text: str) -> dict:
+    try:
+        return parse_memberships(text or "")
+    except InvalidMembership as exc:
+        raise CliError(str(exc)) from None
+
+
+def _report_areas(memberships: dict, out: Out) -> None:
+    out(f"Áreas: {format_memberships(memberships) or '(ninguna: no verá ningún documento)'}")
+    for area, level in memberships.items():
+        if level < AREA_MIN_SENSITIVITY[area]:
+            out(
+                f"Aviso: {area.value}:{level.name} no alcanza el mínimo del área "
+                f"({AREA_MIN_SENSITIVITY[area].name}); no verá documentos de {area.value}."
+            )
+
+
+def _cmd_set_areas(args: argparse.Namespace, **io: object) -> int:
+    out: Out = io["out"]  # type: ignore[assignment]
+    user = _find_user(args.username)
+    memberships = _parse_areas(args.areas)
+    store = get_store()
+    store.set_memberships(user.id, memberships)
+    store.delete_user_sessions(user.id)
+    out(f"Áreas de '{user.username}' reemplazadas; sus sesiones fueron cerradas.")
+    _report_areas(memberships, out)
+    return 0
+
+
+def _cmd_import_users(args: argparse.Namespace, **io: object) -> int:
+    out: Out = io["out"]  # type: ignore[assignment]
+    store = get_store()
+    try:
+        plan = user_import.build_plan(Path(args.file), store)
+    except user_import.ImportError_ as exc:
+        raise CliError(str(exc)) from None
+    out("Plan de importación (el nombre de las personas no se lee ni se guarda):")
+    for line in user_import.describe(plan):
+        out(line)
+    if not args.apply:
+        out("Nada cambió. Revisa el plan y repite con --apply para aplicarlo.")
+        return 0
+    counts = user_import.apply_plan(plan, store)
+    out(
+        f"Aplicado: {counts['creados']} creados (desactivados), "
+        f"{counts['actualizados']} actualizados, {counts['sin_cambios']} sin cambios."
+    )
+    if counts["creados"]:
+        out("Para habilitar a cada persona nueva: reset-password --username X y enable-user.")
+        out("Las cuentas control_total además exigen enroll-totp.")
+    return 0
+
+
 def _cmd_set_active(args: argparse.Namespace, *, active: bool, **io: object) -> int:
     out: Out = io["out"]  # type: ignore[assignment]
     user = _find_user(args.username)
@@ -165,11 +235,13 @@ def _cmd_list_users(_: argparse.Namespace, **io: object) -> int:
     if not users:
         out("(sin usuarios)")
         return 0
-    out(f"{'usuario':<24}{'rol':<16}{'activo':<8}{'totp':<6}")
+    store = get_store()
+    out(f"{'usuario':<36}{'rol':<16}{'activo':<8}{'totp':<6}áreas")
     for user in users:
+        areas = format_memberships(store.get_memberships(user.id)) or "-"
         out(
-            f"{user.username:<24}{user.role:<16}"
-            f"{'sí' if user.active else 'no':<8}{'sí' if user.totp_enabled else 'no':<6}"
+            f"{user.username:<36}{user.role:<16}"
+            f"{'sí' if user.active else 'no':<8}{'sí' if user.totp_enabled else 'no':<6}{areas}"
         )
     return 0
 
@@ -197,6 +269,15 @@ def _parser() -> argparse.ArgumentParser:
     p = sub.add_parser("create-user", help="crea un usuario (pide la contraseña)")
     p.add_argument("--username", required=True)
     p.add_argument("--role", required=True, choices=roles)
+    p.add_argument("--areas", default="", help='p.ej. "general:INTERNAL, comercial:CONFIDENTIAL"')
+
+    p = sub.add_parser("set-areas", help="reemplaza las áreas de un usuario y cierra sus sesiones")
+    p.add_argument("--username", required=True)
+    p.add_argument("--areas", required=True, help='"" quita todas las áreas')
+
+    p = sub.add_parser("import-users", help="importa usuarios desde .xlsx/.csv en el dir. de datos")
+    p.add_argument("--file", required=True)
+    p.add_argument("--apply", action="store_true", help="sin esto solo muestra el plan")
 
     for name, help_ in (
         ("enroll-totp", "(re)enrola el segundo factor de un usuario"),
@@ -235,6 +316,8 @@ def main(
         "enroll-totp": _cmd_enroll_totp,
         "reset-password": _cmd_reset_password,
         "set-role": _cmd_set_role,
+        "set-areas": _cmd_set_areas,
+        "import-users": _cmd_import_users,
         "disable-user": lambda a, **kw: _cmd_set_active(a, active=False, **kw),
         "enable-user": lambda a, **kw: _cmd_set_active(a, active=True, **kw),
         "unlock": _cmd_unlock,

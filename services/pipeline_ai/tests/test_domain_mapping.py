@@ -3,81 +3,82 @@ import pytest
 from pipeline_ai.ingestion.domain_mapping import (
     _KEYWORDS,
     UNCLASSIFIED,
-    infer_domain_from_folder_path,
+    infer_area_from_folder_path,
 )
-from pipeline_ai.privacy.sensitivity import DOMAIN_SENSITIVITY
-from pipeline_ai.security.access import allowed_domains, can_view_document
+from pipeline_ai.security.access import can_view_document
+from pipeline_ai.security.areas import Area
 
-
-def test_ventas_folder():
-    assert infer_domain_from_folder_path(["Ventas", "2026"]) == "ventas"
-
-
-def test_inventario_folder_variants():
-    assert infer_domain_from_folder_path(["Inventario"]) == "inventario"
-    assert infer_domain_from_folder_path(["Subastas Agosto"]) == "inventario"
-    assert infer_domain_from_folder_path(["Consignación"]) == "inventario"
-
-
-def test_proveedores_folder():
-    assert infer_domain_from_folder_path(["Proveedores", "Contratos"]) == "proveedores"
-
-
-def test_sourcing_folder_maps_to_proveedores():
-    assert infer_domain_from_folder_path(["Sourcing"]) == "proveedores"
-
-
-def test_administracion_folder():
-    assert infer_domain_from_folder_path(["Administracion"]) == "administracion"
-    assert infer_domain_from_folder_path(["Finanzas"]) == "administracion"
-
-
-def test_proyectos_is_its_own_confidential_domain():
-    # Decisión del negocio (20 oct 2026): los proyectos NO son visibles para `consulta`.
-    assert infer_domain_from_folder_path(["Proyectos"]) == "proyectos"
-    assert infer_domain_from_folder_path(["Proyectos 2026", "Q4"]) == "proyectos"
-    assert "proyectos" not in allowed_domains("consulta")
-    assert "proyectos" in allowed_domains("lider")
-
-
-def test_general_requires_an_explicit_folder_name():
-    assert infer_domain_from_folder_path(["General"]) == "general"
-    assert infer_domain_from_folder_path(["Público"]) == "general"
-    # Confirmado con el negocio: logística no contiene datos de clientes ni cifras financieras.
-    assert infer_domain_from_folder_path(["Logistica"]) == "general"
+infer = infer_area_from_folder_path
 
 
 @pytest.mark.parametrize(
-    "folder",
-    ["Recursos Humanos", "Dirección", "Legal", "Marketing", "Varios", "2026", "Archivo"],
+    ("folder", "area"),
+    [
+        (["Ventas", "2026"], "comercial"),
+        (["Comercial"], "comercial"),
+        (["Inventario"], "inventario"),
+        (["Subastas Agosto"], "inventario"),
+        (["Consignación"], "inventario"),
+        (["Proveedores", "Contratos"], "sourcing"),
+        (["Sourcing"], "sourcing"),
+        (["Websourcing"], "sourcing"),
+        (["Administracion"], "finanzas"),
+        (["Finanzas"], "finanzas"),
+        (["Recursos Humanos"], "rh"),
+        (["RH"], "rh"),
+        (["Nómina"], "rh"),  # antes era administracion: ahora RH (RESTRICTED)
+        (["Dirección"], "direccion"),
+        (["Proyectos 2026", "Q4"], "proyectos"),
+        (["Logística"], "logistica"),  # antes era general
+        (["Marketing"], "marketing"),
+        (["Taller"], "taller"),
+        (["General"], "general"),
+        (["Público"], "general"),
+    ],
 )
+def test_department_folders_map_to_areas(folder, area):
+    assert infer(folder) == area
+
+
+def test_more_sensitive_areas_win_when_a_folder_mentions_two():
+    assert infer(["Nómina Finanzas"]) == "rh"
+    assert infer(["Dirección General"]) == "direccion"
+    assert infer(["Finanzas Comercial"]) == "finanzas"
+
+
+def test_word_prefix_matching_does_not_confuse_inventario_with_ventas():
+    assert infer(["Inventario"]) == "inventario"
+
+
+@pytest.mark.parametrize("folder", ["Legal", "Varios", "2026", "Archivo", "Compartido"])
 def test_unrecognized_folders_fail_closed(folder):
-    # Antes caían en "general" (visible para `consulta`): un departamento nuevo quedaba expuesto.
-    assert infer_domain_from_folder_path([folder]) == UNCLASSIFIED
+    assert infer([folder]) == UNCLASSIFIED
 
 
 def test_files_at_the_shared_root_fail_closed():
-    assert infer_domain_from_folder_path([]) == UNCLASSIFIED
+    assert infer([]) == UNCLASSIFIED
 
 
 def test_only_the_first_folder_level_decides():
-    assert infer_domain_from_folder_path(["Varios", "Ventas"]) == UNCLASSIFIED
-    assert infer_domain_from_folder_path(["Ventas", "Varios"]) == "ventas"
+    assert infer(["Varios", "Ventas"]) == UNCLASSIFIED
+    assert infer(["Ventas", "Varios"]) == "comercial"
 
 
 def test_accents_and_case_are_normalized():
-    assert infer_domain_from_folder_path(["PROVEEDORES"]) == "proveedores"
-    assert infer_domain_from_folder_path(["Consignación de Equipos"]) == "inventario"
+    assert infer(["PROVEEDORES"]) == "sourcing"
+    assert infer(["Consignación de Equipos"]) == "inventario"
 
 
 def test_unclassified_is_visible_to_nobody():
-    assert UNCLASSIFIED not in DOMAIN_SENSITIVITY
-    for role in ("consulta", "lider", "configuracion", "control_total"):
-        assert UNCLASSIFIED not in allowed_domains(role)
-        assert can_view_document(role, {"domain": UNCLASSIFIED}) is False
+    everything = {area: level for area, level in ((a, 3) for a in Area)}
+    assert can_view_document(everything, {"area": UNCLASSIFIED}) is False
 
 
-@pytest.mark.parametrize("domain", list(_KEYWORDS))
-def test_every_mapped_domain_has_a_sensitivity(domain):
-    # Un dominio que el mapeo puede devolver pero que el RBAC no conoce sería invisible para todos.
-    assert domain in DOMAIN_SENSITIVITY
+@pytest.mark.parametrize("area", list(_KEYWORDS))
+def test_every_mapped_area_is_a_real_area(area):
+    # Un área que el mapeo puede devolver pero que el modelo no conoce sería invisible.
+    assert Area(area)
+
+
+def test_every_area_has_a_folder_keyword():
+    assert set(_KEYWORDS) == {a.value for a in Area}

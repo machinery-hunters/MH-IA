@@ -116,7 +116,51 @@ docker compose run --rm mhia-api python -m pipeline_ai.security.manage list-user
 ```
 
 Otros comandos: `reset-password`, `set-role`, `disable-user`, `enable-user`,
-`unlock`, `revoke-sessions`. La base (`data/auth.db`) vive en el volumen
+`unlock`, `revoke-sessions`.
+
+#### Áreas: qué ve cada persona
+
+El rol dice qué puede **hacer** la persona; sus **áreas** dicen qué puede **ver**
+(`área:NIVEL`, niveles `INTERNAL`, `CONFIDENTIAL`, `RESTRICTED`). Sin áreas no
+ve ningún documento. `control_total` no lee datos por su rol: para el uso
+diario, Sistemas crea una **segunda cuenta** `lider` con `general:INTERNAL`.
+
+```bash
+docker compose run --rm mhia-api python -m pipeline_ai.security.manage create-user --username <usuario> --role lider --areas "general:INTERNAL, comercial:CONFIDENTIAL, inventario:CONFIDENTIAL"
+docker compose run --rm mhia-api python -m pipeline_ai.security.manage set-areas --username <usuario> --areas "general:INTERNAL, rh:RESTRICTED"
+```
+
+`set-areas` reemplaza todas las áreas y cierra las sesiones de la persona. La
+CLI avisa si un nivel no alcanza el mínimo del área (`rh` exige RESTRICTED;
+`general`, INTERNAL; el resto, CONFIDENTIAL). Lo RESTRICTED nunca se manda a
+Claude: la persona recibe un aviso de contenido restringido.
+
+Al actualizar desde una versión sin áreas, la base se migra sola al arrancar:
+cada usuario recibe las áreas equivalentes a lo que su rol veía, salvo
+`control_total`, que queda sin áreas. Revísalo con `list-users`. Después,
+**reindexa** (`ingest`) para que cada fragmento lleve su área nueva (por
+ejemplo, Nómina pasa de Finanzas a RH y Logística deja de quedar sin indexar).
+
+#### Importar a las personas desde la lista de Sistemas
+
+La lista (Excel o CSV con columnas de correo y puesto) tiene datos personales:
+cópiala **solo** a `./data/` (git la ignora). El nombre no se lee ni se guarda.
+El rol y las áreas salen del puesto (`security/presets.py`, plan §2.5.1); un
+puesto sin preset se reporta y no se importa.
+
+```bash
+# 1. Simulación: muestra el plan, no cambia nada
+docker compose run --rm mhia-api python -m pipeline_ai.security.manage import-users --file /app/data/usuarios.xlsx
+# 2. Aplicar
+docker compose run --rm mhia-api python -m pipeline_ai.security.manage import-users --file /app/data/usuarios.xlsx --apply
+# 3. Por cada persona nueva (se crean desactivadas, con contraseña desconocida)
+docker compose run --rm mhia-api python -m pipeline_ai.security.manage reset-password --username <correo>
+docker compose run --rm mhia-api python -m pipeline_ai.security.manage enable-user --username <correo>
+```
+
+Reimportar actualiza rol y áreas de quien cambió (y cierra sus sesiones), sin
+tocar contraseña, segundo factor ni estado; a quien ya no está en la lista solo
+lo reporta. Borra la lista de `./data/` al terminar. La base (`data/auth.db`) vive en el volumen
 `./data` y entra en el respaldo diario. Guarda una copia de `.env` aparte y
 fuera de la Mac (sin `API_TOTP_KEY` los secretos TOTP enrolados no se pueden
 descifrar): el respaldo automático **no** incluye `.env`.

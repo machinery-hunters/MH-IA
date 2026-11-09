@@ -26,7 +26,7 @@ from pipeline_ai.api.origin import request_origin_ok
 from pipeline_ai.api.query_service import QueryFailedError, QueryTimeoutError, run_query
 from pipeline_ai.config import settings
 from pipeline_ai.connectors.registry import get_connectors
-from pipeline_ai.security.roles import Permission, Principal
+from pipeline_ai.security.roles import Permission, Principal, principal_view
 
 # Dependencias de autorización como singletons de módulo (patrón recomendado
 # por FastAPI y exigido por la regla B008 de ruff).
@@ -104,12 +104,7 @@ def create_app(allowed_hosts: Sequence[str] | None = None) -> FastAPI:
         principal: Principal = _CAN_QUERY,
     ) -> dict[str, object]:
         # La GUI construye su navegación a partir de esto; no hardcodea roles.
-        return {
-            "user_id": principal.user_id,
-            "username": principal.username,
-            "role": principal.role.value,
-            "permissions": sorted(p.value for p in principal.permissions),
-        }
+        return principal_view(principal)
 
     @app.get("/api/v1/connectors")
     async def list_connectors(
