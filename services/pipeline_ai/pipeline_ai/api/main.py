@@ -26,6 +26,7 @@ from pipeline_ai.api.origin import request_origin_ok
 from pipeline_ai.api.query_service import QueryFailedError, QueryTimeoutError, run_query
 from pipeline_ai.config import settings
 from pipeline_ai.connectors.registry import get_connectors
+from pipeline_ai.security.auth_store import close_store, get_store
 from pipeline_ai.security.roles import Permission, Principal, principal_view
 
 # Dependencias de autorización como singletons de módulo (patrón recomendado
@@ -62,7 +63,11 @@ def create_app(allowed_hosts: Sequence[str] | None = None) -> FastAPI:
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         # Falla explícita al arrancar si falta un secreto crítico en producción.
         settings.require_production_secrets()
+        # Abre la base de usuarios al arrancar: crea/migra el esquema (y, con Postgres, importa
+        # una sola vez el auth.db anterior). Si la base no responde, la API no arranca.
+        get_store()
         yield
+        close_store()
 
     app = FastAPI(
         title="MH IA",

@@ -3,6 +3,7 @@
 import logging
 import sqlite3
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
@@ -293,12 +294,18 @@ def test_wildcard_hosts_match_one_suffix_only():
 # -- Errores cerrados y registros ---------------------------------------------------------
 
 
-def test_a_database_failure_denies_access_instead_of_opening_it(client, make_user, monkeypatch):
+DB_FAILURES = [sqlite3.OperationalError("disco lleno"), psycopg.OperationalError("disco lleno")]
+
+
+@pytest.mark.parametrize("error", DB_FAILURES, ids=["sqlite", "postgres"])
+def test_a_database_failure_denies_access_instead_of_opening_it(
+    client, make_user, monkeypatch, error
+):
     make_user()
     _login(client)
 
     def boom(_token):
-        raise sqlite3.OperationalError("disco lleno")
+        raise error
 
     monkeypatch.setattr(auth, "resolve_session", boom)
 
@@ -306,11 +313,12 @@ def test_a_database_failure_denies_access_instead_of_opening_it(client, make_use
     assert r.status_code == 503 and "disco" not in r.text
 
 
-def test_login_database_failure_returns_503(client, make_user, monkeypatch):
+@pytest.mark.parametrize("error", DB_FAILURES, ids=["sqlite", "postgres"])
+def test_login_database_failure_returns_503(client, make_user, monkeypatch, error):
     make_user()
 
     def boom(*_a, **_k):
-        raise sqlite3.OperationalError("disco lleno")
+        raise error
 
     monkeypatch.setattr(auth, "authenticate", boom)
 

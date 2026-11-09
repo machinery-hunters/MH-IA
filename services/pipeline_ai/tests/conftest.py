@@ -1,7 +1,10 @@
 """Fixtures compartidas de las pruebas de autenticación."""
 
+import os
+import uuid
 from types import SimpleNamespace
 
+import psycopg
 import pytest
 from argon2 import PasswordHasher
 from cryptography.fernet import Fernet
@@ -32,10 +35,49 @@ class FakeClock:
         self.t += seconds
 
 
+# Postgres de pruebas (en CI, un contenedor de servicio). Si está, cada prueba que usa la base
+# corre contra los DOS motores; si no, solo contra SQLite. En CI es obligatorio: así la
+# cobertura de Postgres no puede desaparecer en silencio.
+PG_TEST = {
+    "host": os.getenv("MHIA_TEST_POSTGRES_HOST", ""),
+    "port": int(os.getenv("MHIA_TEST_POSTGRES_PORT", "5432")),
+    "dbname": os.getenv("MHIA_TEST_POSTGRES_DB", "mhia"),
+    "user": os.getenv("MHIA_TEST_POSTGRES_USER", "mhia"),
+    "password": os.getenv("MHIA_TEST_POSTGRES_PASSWORD", ""),
+}
+if os.getenv("CI") and not PG_TEST["host"]:
+    raise RuntimeError("En CI las pruebas exigen MHIA_TEST_POSTGRES_HOST (servicio Postgres).")
+BACKENDS = ["sqlite", "postgres"] if PG_TEST["host"] else ["sqlite"]
+
+
 @pytest.fixture
-def auth_env(tmp_path, monkeypatch):
-    """Base SQLite temporal, secretos de prueba, argon2 barato y reloj falso."""
+def pg_schema(monkeypatch):
+    """Configura un esquema desechable de Postgres y lo borra al terminar."""
+    schema = f"t_{uuid.uuid4().hex[:12]}"
+    admin = {k: v for k, v in PG_TEST.items()}
+    with psycopg.connect(**admin, autocommit=True) as conn:
+        conn.execute(f"CREATE SCHEMA {schema}")
+    monkeypatch.setattr(settings, "auth_backend", "postgres")
+    monkeypatch.setattr(settings, "postgres_host", PG_TEST["host"])
+    monkeypatch.setattr(settings, "postgres_port", PG_TEST["port"])
+    monkeypatch.setattr(settings, "postgres_db", PG_TEST["dbname"])
+    monkeypatch.setattr(settings, "postgres_user", PG_TEST["user"])
+    monkeypatch.setattr(settings, "postgres_password", PG_TEST["password"])
+    monkeypatch.setattr(settings, "postgres_schema", schema)
+    yield schema
+    auth_store.close_store()
+    with psycopg.connect(**admin, autocommit=True) as conn:
+        conn.execute(f"DROP SCHEMA {schema} CASCADE")
+
+
+@pytest.fixture(params=BACKENDS)
+def auth_env(request, tmp_path, monkeypatch):
+    """Base temporal (SQLite o un esquema de Postgres), secretos de prueba, argon2 barato y
+    reloj falso."""
     monkeypatch.setattr(settings, "auth_db_path", str(tmp_path / "auth.db"))
+    monkeypatch.setattr(settings, "auth_backend", "sqlite")
+    if request.param == "postgres":
+        request.getfixturevalue("pg_schema")
     monkeypatch.setattr(settings, "api_session_secret", "s" * 40)
     monkeypatch.setattr(settings, "api_totp_key", Fernet.generate_key().decode())
     monkeypatch.setattr(settings, "cookie_secure", False)
@@ -50,7 +92,7 @@ def auth_env(tmp_path, monkeypatch):
     fake_clock = FakeClock()
     monkeypatch.setattr(clock, "now", fake_clock)
     store = auth_store.get_store()
-    yield SimpleNamespace(clock=fake_clock, store=store)
+    yield SimpleNamespace(clock=fake_clock, store=store, backend=request.param)
     passwords._dummy_hash.cache_clear()
 
 
@@ -68,3 +110,21 @@ def make_user(auth_env):
         return user
 
     return _make
+
+
+TABLES = ("users", "sessions", "memberships", "throttle", "admin_audit")
+
+
+def db_count(store, table: str) -> int:
+    with store.connection() as conn:
+        return conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]  # noqa: S608
+
+
+def dump_db(store) -> str:
+    """Todo el contenido de la base como texto, para comprobar qué se guarda en claro."""
+    with store.connection() as conn:
+        return "\n".join(
+            repr(dict(row))
+            for table in TABLES
+            for row in conn.execute(f"SELECT * FROM {table}").fetchall()  # noqa: S608
+        )

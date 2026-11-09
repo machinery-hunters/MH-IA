@@ -8,7 +8,6 @@ No existe registro público: los usuarios se crean desde el servidor con
 from __future__ import annotations
 
 import logging
-import sqlite3
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -17,6 +16,7 @@ from pydantic import BaseModel, Field
 from pipeline_ai.api.deps import session_cookie_name
 from pipeline_ai.config import settings
 from pipeline_ai.security import auth
+from pipeline_ai.security.auth_store import DB_ERRORS
 from pipeline_ai.security.roles import Principal, Role, principal_view
 
 log = logging.getLogger("mhia.auth")
@@ -49,7 +49,7 @@ def _set_session_cookie(response: Response, token: str) -> None:
 def login(body: LoginRequest, response: Response) -> object:
     try:
         result = auth.authenticate(body.username, body.password, body.totp_code)
-    except (sqlite3.Error, auth.AuthConfigError) as exc:
+    except (*DB_ERRORS, auth.AuthConfigError) as exc:
         log.error("Login no disponible: %s", type(exc).__name__)
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, "Servicio de autenticación no disponible."
@@ -94,7 +94,7 @@ def logout(request: Request, response: Response) -> None:
     token = request.cookies.get(session_cookie_name())
     try:
         auth.logout(token)
-    except (sqlite3.Error, auth.AuthConfigError) as exc:
+    except (*DB_ERRORS, auth.AuthConfigError) as exc:
         # Aun si la base falla, se borra la cookie del navegador.
         log.error("Logout con error: %s", type(exc).__name__)
     response.delete_cookie(

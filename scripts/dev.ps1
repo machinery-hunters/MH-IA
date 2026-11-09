@@ -119,6 +119,13 @@ try {
             # Valida el entorno SIN levantar nada. Reúne todos los errores y falla al final.
             $problems = @()
             if (-not (Test-Path ".env")) { Write-Warning ".env no existe: Copy-Item .env.example .env" }
+            else {
+                # Solo se lee esa línea. Sin contraseña, Postgres no arranca.
+                $pg = Select-String -Path ".env" -Pattern '^POSTGRES_PASSWORD=(.*)$' | Select-Object -First 1
+                if (-not $pg -or -not $pg.Matches[0].Groups[1].Value) { $problems += "POSTGRES_PASSWORD vacía en .env (ver .env.example)" }
+                elseif ($pg.Matches[0].Groups[1].Value.Length -lt 24) { Write-Warning "POSTGRES_PASSWORD tiene menos de 24 caracteres (producción lo exige)" }
+                else { Write-Host "POSTGRES_PASSWORD definida (OK)" }
+            }
             Invoke-Checked { docker compose @Compose config --quiet }
             Write-Host "docker compose config ($OllamaMode): OK"
             $published = docker compose @Compose config --format json | ConvertFrom-Json

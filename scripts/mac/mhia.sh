@@ -105,6 +105,8 @@ doctor() {
     perms="$(stat -f '%Lp' .env)"
     [ "$perms" = "600" ] || { err ".env tiene permisos $perms; deben ser 600 (chmod 600 .env)"; problems=$((problems + 1)); }
     grep -q '^MHIA_ENV=production' .env || log "AVISO: MHIA_ENV no es production en .env"
+    # Solo se lee esa línea (sin ejecutar el .env). La API exige 24+ caracteres en producción.
+    grep -Eq '^POSTGRES_PASSWORD=.{24,}$' .env || { err "POSTGRES_PASSWORD falta o tiene menos de 24 caracteres en .env"; problems=$((problems + 1)); }
   fi
   git check-ignore -q .env || { err ".env NO está ignorado por git"; problems=$((problems + 1)); }
   if ! "${COMPOSE[@]}" config --quiet; then

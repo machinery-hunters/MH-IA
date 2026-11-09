@@ -13,13 +13,13 @@ el filtrado por rol se aplica aquí, en el servidor, nunca solo en la GUI.
 from __future__ import annotations
 
 import logging
-import sqlite3
 from collections.abc import Callable
 
 from fastapi import Depends, HTTPException, Request, status
 
 from pipeline_ai.config import settings
 from pipeline_ai.security import auth
+from pipeline_ai.security.auth_store import DB_ERRORS
 from pipeline_ai.security.roles import Permission, Principal, Role
 
 log = logging.getLogger("mhia.auth")
@@ -44,7 +44,7 @@ def get_current_principal(request: Request) -> Principal:
     token = request.cookies.get(session_cookie_name())
     try:
         info = auth.resolve_session(token)
-    except (sqlite3.Error, auth.AuthConfigError) as exc:
+    except (*DB_ERRORS, auth.AuthConfigError) as exc:
         # Falla cerrada: sin poder validar la sesión nadie entra.
         log.error("Autenticación no disponible: %s", type(exc).__name__)
         raise HTTPException(

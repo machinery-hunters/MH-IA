@@ -45,6 +45,8 @@ def _prod(monkeypatch, **overrides):
     monkeypatch.setattr(settings, "api_session_secret", "x" * 32)
     monkeypatch.setattr(settings, "api_totp_key", Fernet.generate_key().decode())
     monkeypatch.setattr(settings, "cookie_secure", True)
+    monkeypatch.setattr(settings, "auth_backend", "postgres")
+    monkeypatch.setattr(settings, "postgres_password", "p" * 24)
     for k, v in overrides.items():
         monkeypatch.setattr(settings, k, v)
 
@@ -99,6 +101,22 @@ def test_production_guard_requires_secure_cookies(monkeypatch):
     _prod(monkeypatch, cookie_secure=False)
     with pytest.raises(RuntimeError, match="COOKIE_SECURE"):
         settings.require_production_secrets()
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"auth_backend": "sqlite"}, "AUTH_BACKEND"),
+        ({"postgres_password": "corta"}, "POSTGRES_PASSWORD"),
+        ({"postgres_password": ""}, "POSTGRES_PASSWORD"),
+    ],
+)
+def test_production_guard_requires_postgres_with_a_strong_password(monkeypatch, overrides, message):
+    _prod(monkeypatch, **overrides)
+
+    with pytest.raises(RuntimeError, match=message) as exc:
+        settings.require_production_secrets()
+    assert "corta" not in str(exc.value)
 
 
 def test_production_guard_is_noop_in_development(monkeypatch):

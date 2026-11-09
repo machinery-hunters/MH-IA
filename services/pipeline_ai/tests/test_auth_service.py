@@ -1,24 +1,12 @@
 """Servicio de autenticación: login, bloqueo, segundo factor y vida de las sesiones."""
 
-import sqlite3
-
 import pytest
 from argon2 import PasswordHasher
 from cryptography.fernet import Fernet
 
 from pipeline_ai.config import settings
 from pipeline_ai.security import auth, passwords, totp
-from tests.conftest import PASSWORD
-
-
-def _dump_db(store) -> str:
-    """Todo el contenido de la base como texto, para comprobar qué se guarda en claro."""
-    with sqlite3.connect(store.path) as conn:
-        tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-        return "\n".join(
-            repr(row) for t in tables for row in conn.execute(f"SELECT * FROM {t}")  # noqa: S608
-        )
-
+from tests.conftest import PASSWORD, db_count, dump_db
 
 # -- Login básico y uniformidad de fallos -------------------------------------------------
 
@@ -39,8 +27,8 @@ def test_the_session_token_is_never_stored_in_clear(auth_env, make_user):
 
     token = auth.authenticate("ana", PASSWORD).token
 
-    assert token and token not in _dump_db(auth_env.store)
-    assert PASSWORD not in _dump_db(auth_env.store)
+    assert token and token not in dump_db(auth_env.store)
+    assert PASSWORD not in dump_db(auth_env.store)
 
 
 def test_each_login_gets_a_fresh_random_token(make_user):
@@ -158,8 +146,7 @@ def test_failed_attempts_do_not_create_sessions(auth_env, make_user):
     make_user()
     auth.authenticate("ana", "mala-contraseña-1")
 
-    with sqlite3.connect(auth_env.store.path) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+    assert db_count(auth_env.store, "sessions") == 0
 
 
 # -- Segundo factor ---------------------------------------------------------------------
@@ -263,8 +250,7 @@ def test_expired_sessions_are_deleted_from_the_database(auth_env, make_user):
     auth_env.clock.advance(1801)
     auth.resolve_session(token)
 
-    with sqlite3.connect(auth_env.store.path) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+    assert db_count(auth_env.store, "sessions") == 0
 
 
 def test_role_changes_and_deactivation_apply_on_the_next_request(auth_env, make_user):

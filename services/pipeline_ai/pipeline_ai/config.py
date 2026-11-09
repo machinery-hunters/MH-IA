@@ -112,8 +112,21 @@ class Settings:
     api_totp_key: str = os.getenv("API_TOTP_KEY", "")
 
     # ── Autenticación ───────────────────────────────────────────────────
-    # Base SQLite de usuarios, sesiones e intentos (volumen ./data, fuera de git).
+    # Motor de la base de usuarios, áreas, sesiones y registro de cambios:
+    #   postgres -> el de los despliegues con Docker (el compose lo fija).
+    #   sqlite   -> pruebas y desarrollo sin Docker (archivo AUTH_DB_PATH).
+    auth_backend: str = os.getenv("AUTH_BACKEND", "sqlite").strip().lower()
+    # Archivo SQLite. Con Postgres, si existe y Postgres está vacío, se migra solo una vez.
+    # Su carpeta es además el "directorio de datos" (volumen ./data, fuera de git).
     auth_db_path: str = os.getenv("AUTH_DB_PATH", "/app/data/auth.db")
+    # Postgres: servicio interno del compose, sin puerto publicado.
+    postgres_host: str = os.getenv("POSTGRES_HOST", "postgres")
+    postgres_port: int = int(os.getenv("POSTGRES_PORT", "5432"))
+    postgres_db: str = os.getenv("POSTGRES_DB", "mhia")
+    postgres_user: str = os.getenv("POSTGRES_USER", "mhia")
+    postgres_password: str = os.getenv("POSTGRES_PASSWORD", "")
+    # Esquema de Postgres (las pruebas usan uno desechable por caso).
+    postgres_schema: str = os.getenv("POSTGRES_SCHEMA", "public")
     # Sesión: caduca por inactividad y, pase lo que pase, por antigüedad absoluta.
     session_idle_s: int = int(os.getenv("SESSION_IDLE_S", "1800"))
     session_absolute_s: int = int(os.getenv("SESSION_ABSOLUTE_S", "43200"))
@@ -167,6 +180,10 @@ class Settings:
             raise RuntimeError("API_SESSION_SECRET debe tener al menos 32 caracteres.")
         if not self.cookie_secure:
             raise RuntimeError("API_COOKIE_SECURE debe ser true cuando MHIA_ENV=production.")
+        if self.auth_backend != "postgres":
+            raise RuntimeError("AUTH_BACKEND debe ser postgres cuando MHIA_ENV=production.")
+        if len(self.postgres_password) < 24:
+            raise RuntimeError("POSTGRES_PASSWORD debe tener al menos 24 caracteres.")
         try:
             from cryptography.fernet import Fernet
 

@@ -43,8 +43,8 @@ def test_published_ports_only_on_loopback(file, name, svc):
 
 
 @pytest.mark.parametrize(("file", "name", "svc"), _all_services())
-def test_qdrant_and_ollama_never_publish_ports(file, name, svc):
-    if name in {"qdrant", "ollama"}:
+def test_qdrant_postgres_and_ollama_never_publish_ports(file, name, svc):
+    if name in {"qdrant", "postgres", "ollama"}:
         assert not svc.get("ports"), f"{file}:{name} no debe publicar puertos"
 
 
@@ -57,7 +57,21 @@ def test_web_gets_no_backend_secrets_and_no_backend_network():
 def test_backend_services_are_not_on_the_edge_network_except_api():
     services = _load("docker-compose.yml")["services"]
     assert "edge" not in services["qdrant"]["networks"]
+    assert services["postgres"]["networks"] == ["backend"]
     assert set(services["mhia-api"]["networks"]) == {"backend", "edge"}
+
+
+def test_postgres_gets_only_its_own_variables_and_the_api_uses_it():
+    services = _load("docker-compose.yml")["services"]
+    pg = services["postgres"]
+    assert "env_file" not in pg  # nunca recibe ANTHROPIC_API_KEY ni el resto del .env
+    names = {item.split("=", 1)[0] for item in pg["environment"]}
+    assert names == {"POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_INITDB_ARGS"}
+    assert "scram-sha-256" in next(i for i in pg["environment"] if "INITDB" in i)
+    assert "@sha256:" in pg["image"]
+    api_env = services["mhia-api"]["environment"]
+    assert "AUTH_BACKEND=postgres" in api_env
+    assert services["mhia-api"]["depends_on"]["postgres"]["condition"] == "service_healthy"
 
 
 def test_api_dockerfile_does_not_run_as_root():
@@ -76,7 +90,9 @@ def test_env_example_has_no_real_looking_secrets():
     text = (ROOT / ".env.example").read_text(encoding="utf-8")
     assert "sk-ant-xxxxx" in text  # placeholder explícito
     for line in text.splitlines():
-        if line.startswith(("API_SESSION_SECRET=", "GHL_API_TOKEN=", "SUPABASE_SERVICE_KEY=")):
+        if line.startswith(
+            ("API_SESSION_SECRET=", "GHL_API_TOKEN=", "SUPABASE_SERVICE_KEY=", "POSTGRES_PASSWORD=")
+        ):
             assert (
                 line.split("=", 1)[1] == ""
             ), f"valor no vacío en .env.example: {line.split('=')[0]}"

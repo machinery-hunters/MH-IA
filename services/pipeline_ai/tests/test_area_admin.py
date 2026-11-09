@@ -10,10 +10,10 @@ from pipeline_ai.nodes.outbound_node import sensitivity_for_state
 from pipeline_ai.privacy.sensitivity import Sensitivity
 from pipeline_ai.security import auth
 from pipeline_ai.security.areas import Area
-from pipeline_ai.security.auth_store import LEGACY_ROLE_MEMBERSHIPS, SCHEMA_VERSION, AuthStore
+from pipeline_ai.security.auth_store import LEGACY_ROLE_MEMBERSHIPS, SCHEMA_VERSION, SqliteAuthStore
 from pipeline_ai.security.presets import PRESETS, preset_for
 from pipeline_ai.security.roles import Role
-from tests.conftest import PASSWORD
+from tests.conftest import PASSWORD, db_count, dump_db
 from tests.test_auth_cli import IO
 
 I, C, R = Sensitivity.INTERNAL, Sensitivity.CONFIDENTIAL, Sensitivity.RESTRICTED  # noqa: E741
@@ -44,7 +44,7 @@ def test_migration_gives_existing_users_what_their_old_role_could_see(tmp_path):
     path = tmp_path / "auth.db"
     _legacy_db(path)
 
-    store = AuthStore(path)
+    store = SqliteAuthStore(path)
 
     assert store.get_memberships("u1") == {Area.GENERAL: I}
     assert store.get_memberships("u2") == LEGACY_ROLE_MEMBERSHIPS["lider"]
@@ -56,10 +56,10 @@ def test_migration_gives_existing_users_what_their_old_role_could_see(tmp_path):
 def test_migration_runs_once_and_does_not_undo_later_changes(tmp_path):
     path = tmp_path / "auth.db"
     _legacy_db(path)
-    store = AuthStore(path)
+    store = SqliteAuthStore(path)
     store.set_memberships("u1", {Area.MARKETING: C})
 
-    reopened = AuthStore(path)
+    reopened = SqliteAuthStore(path)
 
     assert reopened.get_memberships("u1") == {Area.MARKETING: C}
 
@@ -68,8 +68,12 @@ def test_a_new_database_starts_at_the_current_version_without_memberships(auth_e
     user = make_user()
 
     assert auth_env.store.get_memberships(user.id) == {}
-    with sqlite3.connect(auth_env.store.path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    with auth_env.store.connection() as conn:
+        if auth_env.backend == "sqlite":
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+        else:
+            version = conn.execute("SELECT version FROM schema_meta").fetchone()["version"]
+    assert version == SCHEMA_VERSION
 
 
 # ── Membresías en la base y en la sesión ─────────────────────────────────
@@ -83,20 +87,17 @@ def test_set_memberships_replaces_and_cascades(auth_env, make_user):
 
     assert store.get_memberships(user.id) == {Area.RH: R}
 
-    with sqlite3.connect(store.path) as conn:
-        conn.execute("PRAGMA foreign_keys=ON")
+    with store.connection() as conn:
         conn.execute("DELETE FROM users WHERE id = ?", (user.id,))
-        assert conn.execute("SELECT COUNT(*) FROM memberships").fetchone()[0] == 0
+    assert db_count(store, "memberships") == 0
 
 
 def test_corrupt_rows_in_the_database_are_ignored(auth_env, make_user):
     store = auth_env.store
     user = make_user()
-    with sqlite3.connect(store.path) as conn:
-        conn.executemany(
-            "INSERT INTO memberships (user_id, area, level) VALUES (?, ?, ?)",
-            [(user.id, "ventas", 2), (user.id, "rh", 9), (user.id, "taller", 2)],
-        )
+    with store.connection() as conn:
+        for row in [(user.id, "ventas", 2), (user.id, "rh", 9), (user.id, "taller", 2)]:
+            conn.execute("INSERT INTO memberships (user_id, area, level) VALUES (?, ?, ?)", row)
 
     assert store.get_memberships(user.id) == {Area.TALLER: C}
 
@@ -235,7 +236,7 @@ def test_import_apply_creates_disabled_users_with_their_preset(auth_env, data_di
     # Nadie conoce la contraseña: no puede entrar hasta reset-password + enable-user.
     assert auth.authenticate("ceo@mh.com", PASSWORD).status == "invalid"
     # El nombre no queda en la base.
-    assert b"Persona" not in store.path.read_bytes()
+    assert "Persona" not in dump_db(store)
 
 
 def test_reimport_updates_changed_people_and_closes_their_sessions(auth_env, data_dir, make_user):

@@ -26,7 +26,7 @@ add_failure() { failures="${failures}${failures:+, }$1"; }
 curl -fsS --max-time 5 http://127.0.0.1:8000/health >/dev/null 2>&1 || add_failure "api"
 curl -fsS --max-time 5 http://127.0.0.1:11434/api/version >/dev/null 2>&1 || add_failure "ollama"
 if command -v docker >/dev/null 2>&1; then
-  for name in mhia-api mhia-qdrant mhia-web; do
+  for name in mhia-api mhia-qdrant mhia-postgres mhia-web; do
     status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$name" 2>/dev/null || echo missing)"
     [ "$status" = "healthy" ] || add_failure "$name:$status"
   done
