@@ -2,8 +2,9 @@
 Servicio de consulta: ejecuta el grafo de MH IA en nombre de un usuario autenticado.
 
 Responsabilidades de esta capa (el grafo no sabe de HTTP ni de sesiones):
-  - El rol y el usuario salen del `Principal` que resolvió la sesión; el cliente no puede
-    elegirlos. El rol viaja en `state["role"]` y el retriever lo usa para filtrar el contenido.
+  - El rol, el usuario y sus membresías por área salen del `Principal` que resolvió la
+    sesión; el cliente no puede elegirlos. Las membresías viajan en `state["memberships"]` y
+    el retriever las usa para filtrar el contenido.
   - Tope de tiempo total y de consultas simultáneas (Ollama es un solo equipo).
   - Auditoría `mhia.query`: quién (user_id, rol), cuándo, huella SHA-256 y longitud de la
     consulta, resultado y número de fuentes. NUNCA el texto de la consulta ni de la respuesta.
@@ -24,6 +25,7 @@ from typing import Literal
 
 from pipeline_ai.config import settings
 from pipeline_ai.graph import mhia_graph
+from pipeline_ai.security.areas import to_state
 from pipeline_ai.security.roles import Principal
 
 log = logging.getLogger("mhia.query")
@@ -99,6 +101,7 @@ async def run_query(
                     "query": text,
                     "session_id": session_id,
                     "role": principal.role.value,
+                    "memberships": to_state(principal.memberships),
                 }
             )
 

@@ -20,6 +20,8 @@ import pipeline_ai.nodes.ollama_node as ollama_mod
 import pipeline_ai.nodes.retriever_node as retriever_mod
 import pipeline_ai.nodes.router as router_mod
 from pipeline_ai.graph import mhia_graph
+from pipeline_ai.security.areas import to_state
+from pipeline_ai.security.auth_store import LEGACY_ROLE_MEMBERSHIPS
 
 REAL_FILE = "Google Drive: Contrato_Consignacion_034.pdf"
 QUERY = "¿Cuánto debe Acme S.A. según el contrato 034?"
@@ -59,7 +61,7 @@ class FakeStore:
     def __init__(self, results):
         self.results = results
 
-    async def search(self, query, *, domains, k):
+    async def search(self, query, *, access_filter, k):
         # Ignora los dominios a propósito: así las pruebas de RBAC comprueban la 2ª capa.
         return self.results
 
@@ -73,6 +75,7 @@ def install(
     anonymizer_reply=ENTITIES_OK,
     claude_reply=CLAUDE_REPLY,
     docs=True,
+    doc_metadata=None,
 ):
     router_llm = FakeLLM(f'{{"data_domain": "{domain}"}}')
     anonymizer = FakeLLM(anonymizer_reply)
@@ -82,7 +85,8 @@ def install(
             (
                 Document(
                     page_content=body,
-                    metadata={"source": REAL_FILE, "chunk_id": "c1", "domain": doc_domain},
+                    metadata=doc_metadata
+                    or {"source": REAL_FILE, "chunk_id": "c1", "domain": doc_domain},
                 ),
                 0.9,
             )
@@ -97,8 +101,13 @@ def install(
     return SimpleNamespace(anonymizer=anonymizer, claude=claude)
 
 
-async def _run(query=QUERY, role="lider"):
-    return await mhia_graph.ainvoke({"query": query, "role": role, "session_id": "t1"})
+async def _run(query=QUERY, role="lider", memberships=None):
+    memberships = (
+        memberships if memberships is not None else to_state(LEGACY_ROLE_MEMBERSHIPS[role])
+    )
+    return await mhia_graph.ainvoke(
+        {"query": query, "role": role, "memberships": memberships, "session_id": "t1"}
+    )
 
 
 # -- Camino confidencial ---------------------------------------------------------------
@@ -280,3 +289,36 @@ async def test_a_request_without_a_role_is_answered_as_no_evidence(monkeypatch):
 
     assert world.claude.calls == []
     assert result["retrieval_ok"] is False
+
+
+# -- Contenido RESTRICTED: nunca sale a Claude ---------------------------------------------
+
+
+async def test_restricted_rh_content_never_reaches_claude_even_for_rh(monkeypatch):
+    world = install(
+        monkeypatch,
+        domain="general",
+        body="Nómina de octubre: Juan Pérez, sueldo 45,000.",
+        doc_metadata={"source": "Google Drive: nomina.xlsx", "chunk_id": "n1", "area": "rh"},
+    )
+
+    result = await _run("¿Cuánto fue la nómina de octubre?", memberships={"rh": 3, "general": 1})
+
+    assert result["retrieval_ok"] is True  # RH sí puede ver el documento...
+    assert world.claude.calls == []  # ...pero no sale de la red local
+    assert result["aborted"] is True
+    assert "restringido" in result["final_answer"]
+    assert "Juan" not in result["final_answer"] and "45,000" not in result["final_answer"]
+
+
+async def test_restricted_content_is_invisible_to_a_lower_rh_level(monkeypatch):
+    world = install(
+        monkeypatch,
+        domain="general",
+        doc_metadata={"source": "Google Drive: nomina.xlsx", "chunk_id": "n1", "area": "rh"},
+    )
+
+    result = await _run("¿Cuánto fue la nómina?", memberships={"rh": 2, "general": 1})
+
+    assert result["retrieval_ok"] is False
+    assert world.claude.calls == [] and world.anonymizer.prompts == []

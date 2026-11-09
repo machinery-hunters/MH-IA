@@ -15,6 +15,7 @@ import httpx
 from pipeline_ai.config import settings
 from pipeline_ai.connectors.base import ConnectorSpec, RawExtraction
 from pipeline_ai.privacy.sensitivity import Sensitivity
+from pipeline_ai.security.areas import Area
 
 
 @lru_cache
@@ -36,6 +37,7 @@ class CrmConnector:
         name="crm",
         display_name="CRM (GoHighLevel)",
         default_sensitivity=Sensitivity.CONFIDENTIAL,
+        areas=(Area.COMERCIAL,),
         required_settings=("ghl_api_token", "ghl_location_id"),
         timeout_setting="timeout_crm_s",
         description="Contactos, oportunidades y pipeline comercial.",

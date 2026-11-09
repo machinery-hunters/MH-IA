@@ -1,5 +1,6 @@
 """
-Almacén de autenticación (SQLite): usuarios, sesiones y contador de intentos fallidos.
+Almacén de autenticación (SQLite): usuarios, membresías por área, sesiones y contador de
+intentos fallidos.
 
 SQLite basta aquí: un solo servidor, pocos usuarios, sin infraestructura extra. El archivo
 vive en el volumen ./data (fuera de git), con permisos 0600 donde el sistema los soporta.
@@ -19,10 +20,34 @@ import sqlite3
 import uuid
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pipeline_ai.config import settings
+from pipeline_ai.privacy.sensitivity import Sensitivity
+from pipeline_ai.security.areas import Area, from_state
+
+# Versión del esquema (PRAGMA user_version). 1: membresías por área.
+SCHEMA_VERSION = 1
+
+# Migración 0 -> 1: cada usuario existente recibe las áreas equivalentes a lo que su rol
+# podía ver con el modelo anterior (por dominio), para no cambiar su acceso de golpe.
+# Excepción deliberada (plan maestro §2.5.1): control_total ya no lee datos por su rol.
+_C = Sensitivity.CONFIDENTIAL
+_LEGACY_CONFIDENTIAL = {
+    Area.GENERAL: Sensitivity.INTERNAL,
+    Area.COMERCIAL: _C,
+    Area.INVENTARIO: _C,
+    Area.SOURCING: _C,
+    Area.FINANZAS: _C,
+    Area.PROYECTOS: _C,
+}
+LEGACY_ROLE_MEMBERSHIPS: dict[str, dict[Area, Sensitivity]] = {
+    "consulta": {Area.GENERAL: Sensitivity.INTERNAL},
+    "lider": _LEGACY_CONFIDENTIAL,
+    "configuracion": _LEGACY_CONFIDENTIAL,
+    "control_total": {},
+}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -46,6 +71,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     expires_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+CREATE TABLE IF NOT EXISTS memberships (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    area    TEXT NOT NULL,
+    level   INTEGER NOT NULL,
+    PRIMARY KEY (user_id, area)
+);
 CREATE TABLE IF NOT EXISTS throttle (
     key          TEXT PRIMARY KEY,
     failures     INTEGER NOT NULL,
@@ -83,6 +114,7 @@ class SessionInfo:
     username: str
     role: str
     mfa: bool
+    memberships: dict[Area, Sensitivity] = field(default_factory=dict)
 
 
 def _user(row: sqlite3.Row) -> User:
@@ -105,6 +137,7 @@ class AuthStore:
         with self._conn() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_SCHEMA)
+            self._migrate(conn)
         try:
             os.chmod(self.path, 0o600)  # best-effort: en Windows casi no tiene efecto
         except OSError:
@@ -117,6 +150,21 @@ class AuthStore:
             conn.execute("PRAGMA foreign_keys=ON")
             with conn:  # commit al salir bien, rollback si hay excepción
                 yield conn
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < 1:
+            users = conn.execute(
+                "SELECT id, role FROM users WHERE id NOT IN (SELECT user_id FROM memberships)"
+            ).fetchall()
+            for user in users:
+                for area, level in LEGACY_ROLE_MEMBERSHIPS.get(user["role"], {}).items():
+                    conn.execute(
+                        "INSERT INTO memberships (user_id, area, level) VALUES (?, ?, ?)",
+                        (user["id"], area.value, int(level)),
+                    )
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     # -- Usuarios ------------------------------------------------------------------------
 
@@ -160,6 +208,30 @@ class AuthStore:
     def set_role(self, user_id: str, role: str) -> None:
         with self._conn() as conn:
             conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+
+    # -- Membresías por área --------------------------------------------------------------
+
+    def get_memberships(self, user_id: str) -> dict[Area, Sensitivity]:
+        with self._conn() as conn:
+            return self._memberships(conn, user_id)
+
+    @staticmethod
+    def _memberships(conn: sqlite3.Connection, user_id: str) -> dict[Area, Sensitivity]:
+        rows = conn.execute(
+            "SELECT area, level FROM memberships WHERE user_id = ?", (user_id,)
+        ).fetchall()
+        # Filas inválidas (área o nivel desconocidos) se descartan: nunca conceden acceso.
+        return from_state({row["area"]: row["level"] for row in rows})
+
+    def set_memberships(self, user_id: str, memberships: dict[Area, Sensitivity]) -> None:
+        """Reemplaza TODAS las membresías del usuario en una sola transacción."""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM memberships WHERE user_id = ?", (user_id,))
+            for area, level in memberships.items():
+                conn.execute(
+                    "INSERT INTO memberships (user_id, area, level) VALUES (?, ?, ?)",
+                    (user_id, Area(area).value, int(Sensitivity(level))),
+                )
 
     def set_active(self, user_id: str, active: bool) -> None:
         with self._conn() as conn:
@@ -245,7 +317,8 @@ class AuthStore:
 
     def lookup_session(self, token_hash: str, *, now: float, idle_s: int) -> SessionInfo | None:
         """Sesión vigente o None. Borra la sesión si caducó (absoluta o por inactividad) o si
-        el usuario fue desactivado. El rol se lee de la fila del usuario EN CADA petición."""
+        el usuario fue desactivado. El rol y las membresías se leen de la base EN CADA
+        petición: un cambio de permisos rige desde la siguiente consulta."""
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT s.user_id, s.mfa, s.last_seen, s.expires_at, u.username, u.role, u.active"
@@ -266,6 +339,7 @@ class AuthStore:
                 username=row["username"],
                 role=row["role"],
                 mfa=bool(row["mfa"]),
+                memberships=self._memberships(conn, row["user_id"]),
             )
 
     def delete_session(self, token_hash: str) -> None:

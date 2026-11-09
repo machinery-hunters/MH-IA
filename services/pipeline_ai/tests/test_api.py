@@ -47,7 +47,8 @@ def test_me_returns_permissions_from_the_server():
     assert r.status_code == 200
     body = r.json()
     assert body["role"] == "lider"
-    assert "query_confidential" in body["permissions"]
+    assert body["permissions"] == ["query"]
+    assert "areas" in body
     assert "configure_connectors" not in body["permissions"]
 
 

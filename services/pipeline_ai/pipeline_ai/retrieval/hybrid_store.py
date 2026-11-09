@@ -2,14 +2,14 @@
 hybrid_store
 
 Búsqueda híbrida sobre Qdrant: una consulta densa (significado) y una dispersa (palabras
-clave, BM25), ambas con el MISMO filtro de dominios del rol, fusionadas con Reciprocal Rank
+clave, BM25), ambas con el MISMO filtro de acceso por área, fusionadas con Reciprocal Rank
 Fusion. RRF solo usa posiciones, así que no depende de que los dos scores estén en la misma
 escala.
 
 Cada candidato conserva su similitud coseno densa (o None si solo lo encontró la parte léxica):
 el retriever la usa como respaldo cuando el juez de relevancia no está disponible.
 
-El filtro de dominio es la primera capa del RBAC y se aplica DENTRO de Qdrant en ambas
+El filtro de acceso por área es la primera capa del control de acceso y se aplica DENTRO de Qdrant en ambas
 consultas; el retriever vuelve a verificar lo recuperado (segunda capa).
 """
 
@@ -31,19 +31,6 @@ log = logging.getLogger("mhia.retriever")
 RRF_K = 60
 
 Candidate = tuple[Document, float | None]
-
-
-def domain_filter(domains: Sequence[str]) -> qmodels.Filter:
-    """Solo fragmentos cuyo dominio está permitido. Un fragmento sin `metadata.domain` no
-    cumple MatchAny, así que queda fuera (falla cerrada)."""
-    return qmodels.Filter(
-        must=[
-            qmodels.FieldCondition(
-                key="metadata.domain",
-                match=qmodels.MatchAny(any=list(domains)),
-            )
-        ]
-    )
 
 
 def rrf_order(*rankings: Sequence[str]) -> list[str]:
@@ -86,9 +73,10 @@ class HybridStore:
                 )
         return self._hybrid
 
-    async def search(self, query: str, *, domains: Sequence[str], k: int) -> list[Candidate]:
-        """Hasta `k` candidatos en orden de relevancia fusionada, ya filtrados por dominio."""
-        flt = domain_filter(domains)
+    async def search(self, query: str, *, access_filter: qmodels.Filter, k: int) -> list[Candidate]:
+        """Hasta `k` candidatos en orden de relevancia fusionada, ya filtrados por
+        `access_filter` (security.access.access_filter), que se aplica a ambas búsquedas."""
+        flt = access_filter
         pool = max(k * 3, 20)
         vector = await self._embeddings.aembed_query(query)
         hybrid = await self._is_hybrid()

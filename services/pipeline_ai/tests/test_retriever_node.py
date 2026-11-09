@@ -1,4 +1,4 @@
-"""Retriever: respaldo por umbral (piso + margen), juez de relevancia local y RBAC por dominio."""
+"""Retriever: respaldo por umbral (piso + margen), juez de relevancia local y acceso por área."""
 
 import logging
 
@@ -6,28 +6,40 @@ import pytest
 from langchain_core.documents import Document
 
 import pipeline_ai.nodes.retriever_node as retriever_mod
+from pipeline_ai.privacy.sensitivity import Sensitivity
 from pipeline_ai.retrieval.judge import JudgeUnavailable
+from pipeline_ai.security.access import can_view_document
+from pipeline_ai.security.areas import Area, from_state, to_state
+from pipeline_ai.security.auth_store import LEGACY_ROLE_MEMBERSHIPS
+
+# Perfiles de prueba: lo que veía cada rol con el modelo anterior (migración 0 -> 1).
+PROFILES = {role: to_state(m) for role, m in LEGACY_ROLE_MEMBERSHIPS.items()}
 
 
 class FakeStore:
-    """Almacén falso. Por defecto IGNORA el filtro de dominios (simula un filtro roto o
-    alterado) para comprobar la segunda capa; `honor_filter=True` lo aplica como Qdrant."""
+    """Almacén falso. Por defecto IGNORA el filtro de acceso (simula un filtro roto o
+    alterado) para comprobar la segunda capa; `honor_filter=True` lo aplica como Qdrant
+    (la equivalencia exacta con Qdrant la prueba test_access.py)."""
 
-    def __init__(self, scored, *, honor_filter=False):
+    def __init__(self, scored, *, honor_filter=False, memberships=None):
         self.scored = scored
         self.honor_filter = honor_filter
+        self.memberships = memberships or {}
         self.calls = []
 
-    async def search(self, query, *, domains, k):
-        self.calls.append({"query": query, "domains": tuple(domains), "k": k})
+    async def search(self, query, *, access_filter, k):
+        self.calls.append({"query": query, "filter": access_filter, "k": k})
         if not self.honor_filter:
             return self.scored
-        return [(d, s) for d, s in self.scored if d.metadata.get("domain") in set(domains)]
+        return [(d, s) for d, s in self.scored if can_view_document(self.memberships, d.metadata)]
 
 
 def _doc(name: str, domain: str | None = "general") -> Document:
+    """`domain` es la clave anterior; "area:rh" escribe la clave nueva `area`."""
     metadata = {"source": f"Google Drive: {name}", "chunk_id": name}
-    if domain is not None:
+    if domain is not None and domain.startswith("area:"):
+        metadata["area"] = domain.removeprefix("area:")
+    elif domain is not None:
         metadata["domain"] = domain
     return Document(page_content=f"contenido de {name}", metadata=metadata)
 
@@ -50,9 +62,11 @@ def run(monkeypatch):
         """`judge`: None = juez apagado (respaldo por umbral); una función (query, docs) ->
         list[bool] lo enciende y sustituye; una excepción lo enciende y hace que falle."""
         domains = domains or {}
+        memberships = PROFILES.get(role, role) if isinstance(role, str) else role
         store = FakeStore(
             [(_doc(name, domains.get(name, "general")), score) for name, score in scores.items()],
             honor_filter=honor_filter,
+            memberships=from_state(memberships),
         )
         if store_holder is not None:
             store_holder.append(store)
@@ -70,8 +84,8 @@ def run(monkeypatch):
 
             monkeypatch.setattr(retriever_mod, "judge_relevance", fake_judge)
         state = {"query": query}
-        if role is not None:
-            state["role"] = role
+        if memberships is not None:
+            state["memberships"] = memberships
         return await retriever_mod.retriever_node(state)
 
     return _run
@@ -220,26 +234,14 @@ async def test_the_judge_receives_the_query_and_the_store_gets_the_configured_k(
     assert holder[0].calls[0]["k"] == 7
 
 
-# -- RBAC: el rol decide qué contenido existe para la consulta --------------------------------
+# -- Acceso por área: las membresías deciden qué contenido existe para la consulta -------------
 
 
-async def test_the_store_is_asked_for_exactly_the_domains_the_role_may_see(run):
+async def test_the_store_gets_a_filter_only_when_some_area_is_visible(run):
     holder: list[FakeStore] = []
     await run({"a": 0.9}, role="consulta", store_holder=holder)
-
     [call] = holder[0].calls
-    assert set(call["domains"]) == {"general"}
-
-    holder.clear()
-    await run({"a": 0.9}, role="lider", store_holder=holder)
-    assert set(holder[0].calls[0]["domains"]) == {
-        "general",
-        "ventas",
-        "inventario",
-        "proveedores",
-        "administracion",
-        "proyectos",
-    }
+    assert call["filter"] is not None
 
 
 async def test_consulta_never_receives_confidential_fragments_when_the_store_honors_the_filter(
@@ -270,35 +272,67 @@ async def test_second_layer_drops_forbidden_fragments_even_if_the_store_filter_f
 
 
 async def test_when_everything_retrieved_is_forbidden_the_answer_is_no_evidence(run):
-    # Lo que el rol no puede ver es indistinguible de lo que no existe.
+    # Lo que el usuario no puede ver es indistinguible de lo que no existe.
     result = await run({"contrato": 0.95}, role="consulta", domains={"contrato": "proveedores"})
 
     assert result == {"retrieved_docs": [], "citations": [], "retrieval_ok": False}
 
 
-@pytest.mark.parametrize("role", [None, "", "root", "CONSULTA "])
-async def test_without_a_valid_role_nothing_is_retrieved_and_the_store_is_not_queried(run, role):
+@pytest.mark.parametrize(
+    "memberships",
+    [None, {}, "lo que sea", {"ventas": 2}, {"rh": 2}, {"general": 9}, {"comercial": "x"}],
+)
+async def test_without_valid_visible_areas_nothing_is_retrieved_and_the_store_is_not_queried(
+    run, memberships
+):
     holder: list[FakeStore] = []
-    result = await run({"a": 0.99}, role=role, store_holder=holder, judge=_approve("a"))
+    result = await run({"a": 0.99}, role=memberships, store_holder=holder, judge=_approve("a"))
 
     assert result["retrieval_ok"] is False
     assert result["citations"] == []
     assert holder[0].calls == []
 
 
+async def test_control_total_without_areas_reads_nothing(run):
+    holder: list[FakeStore] = []
+    result = await run({"a": 0.99}, role="control_total", store_holder=holder)
+    assert result["retrieval_ok"] is False and holder[0].calls == []
+
+
 @pytest.mark.parametrize("domain", [None, "", "rrhh", "GENERAL"])
-async def test_fragments_without_a_recognised_domain_are_not_visible_to_anyone(run, domain):
-    result = await run({"a": 0.9}, role="control_total", domains={"a": domain})
+async def test_fragments_without_a_recognised_area_are_not_visible_to_anyone(run, domain):
+    everything = {a.value: 3 for a in Area}
+    result = await run({"a": 0.9}, role=everything, domains={"a": domain})
 
     assert result["retrieval_ok"] is False
 
 
-@pytest.mark.parametrize("role", ["lider", "configuracion", "control_total"])
-async def test_confidential_roles_do_see_confidential_domains(run, role):
+@pytest.mark.parametrize("role", ["lider", "configuracion"])
+async def test_confidential_profiles_do_see_confidential_areas(run, role):
     result = await run({"a": 0.9}, role=role, domains={"a": "ventas"})
 
     assert result["retrieval_ok"] is True
     assert result["is_confidential"] is True
+    assert result["content_sensitivity"] == int(Sensitivity.CONFIDENTIAL)
+
+
+async def test_restricted_content_is_marked_for_the_outbound_gateway(run):
+    rh = {"rh": 3, "general": 1}
+    result = await run({"nomina": 0.9, "aviso": 0.88}, role=rh, domains={"nomina": "area:rh"})
+    assert _sources(result) == ["nomina", "aviso"]
+    assert result["content_sensitivity"] == int(Sensitivity.RESTRICTED)
+    assert result["is_confidential"] is True
+
+
+async def test_general_only_content_is_internal(run):
+    result = await run({"aviso": 0.8}, role="consulta")
+    assert result["content_sensitivity"] == int(Sensitivity.INTERNAL)
+    assert result["is_confidential"] is False
+
+
+async def test_rh_level_below_restricted_sees_no_rh_documents(run):
+    result = await run({"nomina": 0.9}, role={"rh": 2}, domains={"nomina": "area:rh"})
+    assert result["retrieval_ok"] is False
 
 
 # -- Privacidad en logs ------------------------------------------------------------------------

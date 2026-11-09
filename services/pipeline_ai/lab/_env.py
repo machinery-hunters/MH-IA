@@ -38,3 +38,17 @@ os.environ["OLLAMA_BASE_URL"] = LAB_OLLAMA_URL
 
 if str(SERVICE_DIR) not in sys.path:
     sys.path.insert(0, str(SERVICE_DIR))
+
+
+def lab_memberships(role: str) -> dict[str, int]:
+    """Áreas con las que el laboratorio pregunta (el grafo las exige; sin ellas no recupera
+    nada). `control_total` (el valor por defecto de los scripts) ve TODAS las áreas en
+    RESTRICTED para medir el ranking sin filtro; en producción ese rol no ve datos. Otro rol
+    usa las áreas que la migración le daría a un usuario existente con ese rol."""
+    from pipeline_ai.privacy.sensitivity import Sensitivity
+    from pipeline_ai.security.areas import Area, to_state
+    from pipeline_ai.security.auth_store import LEGACY_ROLE_MEMBERSHIPS
+
+    if role == "control_total":
+        return to_state({area: Sensitivity.RESTRICTED for area in Area})
+    return to_state(LEGACY_ROLE_MEMBERSHIPS.get(role, {}))

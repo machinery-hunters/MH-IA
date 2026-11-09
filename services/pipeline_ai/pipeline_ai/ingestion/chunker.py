@@ -5,9 +5,11 @@ Produce Document(page_content, metadata) donde metadata debe casar EXACTO
 con lo que pipeline_ai/nodes/retriever_node.py espera al construir `citations`:
   - metadata["source"]  -> lo que se muestra al usuario/Claude como cita
   - metadata["chunk_id"] -> identificador único y estable del chunk
-  - metadata["domain"]   -> dominio de negocio inferido de la carpeta
-    (ventas/inventario/proveedores/administracion/proyectos/general), usado por el RBAC y
-    por retriever_node.py como segunda señal de confidencialidad (ver domain_mapping.py)
+  - metadata["area"]     -> área de negocio inferida de la carpeta (security.areas.Area), que
+    decide quién lo ve (security.access) y su sensibilidad mínima (ver domain_mapping.py)
+  - metadata["sensitivity"] -> nivel (int de Sensitivity) con que se indexó: la mínima del
+    área. Queda en la base para filtrar por nivel dentro de Qdrant; una etiqueta futura por
+    documento solo podrá subirlo
 
 Tablas (hojas de cálculo y CSV): se parten por FILAS y cada fragmento repite la fila de
 encabezados. Cortar por caracteres dejaba los fragmentos 2..N sin nombres de columna, y una
@@ -21,8 +23,9 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from pipeline_ai.config import settings
-from pipeline_ai.ingestion.domain_mapping import infer_domain_from_folder_path
+from pipeline_ai.ingestion.domain_mapping import UNCLASSIFIED, infer_area_from_folder_path
 from pipeline_ai.ingestion.drive_client import GOOGLE_EXPORT_MIME, DriveFile
+from pipeline_ai.security.areas import AREA_MIN_SENSITIVITY, Area
 
 _splitter = RecursiveCharacterTextSplitter(
     chunk_size=settings.chunk_size,
@@ -61,7 +64,11 @@ def chunk_file(file: DriveFile, text: str) -> list[Document]:
     if not text.strip():
         return []
 
-    domain = infer_domain_from_folder_path(file.folder_path)
+    area_name = infer_area_from_folder_path(file.folder_path)
+    if area_name == UNCLASSIFIED:
+        # El indexer ya los descarta antes; aquí se repite por si alguien llama directo.
+        raise ValueError("archivo sin área: no se fragmenta ni se indexa")
+    area = Area(area_name)
     department = file.folder_path[0] if file.folder_path else "(raíz)"
 
     raw_chunks = (
@@ -80,7 +87,8 @@ def chunk_file(file: DriveFile, text: str) -> list[Document]:
                     "chunk_index": i,
                     "web_view_link": file.web_view_link,
                     "modified_time": file.modified_time,
-                    "domain": domain,
+                    "area": area.value,
+                    "sensitivity": int(AREA_MIN_SENSITIVITY[area]),
                     "department": department,
                 },
             )

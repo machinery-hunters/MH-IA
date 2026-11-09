@@ -39,7 +39,8 @@ def test_login_sets_a_hardened_session_cookie(client, make_user):
     assert "domain" not in cookie
     body = r.json()
     assert body["username"] == "ana" and body["role"] == "lider"
-    assert "query_confidential" in body["permissions"]
+    assert body["permissions"] == ["query"]
+    assert "areas" in body
     # El token viaja solo en la cookie, jamás en el cuerpo.
     assert client.cookies.get("mhia_session") not in r.text
 

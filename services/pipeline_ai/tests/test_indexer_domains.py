@@ -71,17 +71,17 @@ def make_indexer(monkeypatch, tmp_path):
 
 
 def _domains(indexer):
-    return {p.payload["metadata"]["domain"] for p in indexer.qdrant.upserts}
+    return {p.payload["metadata"]["area"] for p in indexer.qdrant.upserts}
 
 
 def test_a_file_in_an_unrecognised_folder_is_not_indexed_nor_registered(make_indexer, caplog):
-    indexer = make_indexer([_file(["Recursos Humanos"])])
+    indexer = make_indexer([_file(["Archivo muerto"])])
     with caplog.at_level(logging.WARNING):
         indexer.sync(folder_id="root")
 
     assert indexer.qdrant.upserts == []
     assert make_indexer.manifest() == {}
-    assert "Sin dominio" in caplog.text and "Recursos Humanos" in caplog.text
+    assert "Sin área" in caplog.text and "Archivo muerto" in caplog.text
 
 
 def test_files_at_the_shared_root_are_not_indexed(make_indexer):
@@ -115,7 +115,7 @@ def test_once_the_folder_is_mapped_the_next_sync_indexes_the_file(make_indexer, 
 def test_a_previously_indexed_file_whose_folder_stops_being_mapped_is_withdrawn(make_indexer):
     first = make_indexer([_file(["Ventas"])])
     first.sync(folder_id="root")
-    assert _domains(first) == {"ventas"}
+    assert _domains(first) == {"comercial"}
 
     # La carpeta se renombra a algo que ya no coincide con ningún dominio.
     second = make_indexer([_file(["Archivo muerto"])])

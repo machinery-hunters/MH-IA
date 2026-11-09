@@ -12,12 +12,13 @@ Recupera fragmentos de Qdrant en tres pasos:
      margen relativo (settings.retrieval_score_margin). Un fallo del juez nunca descarta
      evidencia ni abre acceso a nada: el RBAC ya se aplicó antes.
 
-REGLA CRITICA #0 (RBAC - el rol decide qué contenido existe para la consulta):
-Solo se recuperan fragmentos de los dominios que el rol del usuario puede ver
-(`security.access`). Se aplica como filtro de Qdrant y se verifica otra vez sobre lo
-recuperado. El rol lo fija la API desde la sesión (`state["role"]`); si falta o no es
-válido, no se recupera nada (falla cerrada). Lo que el rol no puede ver es indistinguible
-de lo que no existe: el flujo aborta con la misma respuesta de "sin información".
+REGLA CRITICA #0 (acceso por área - las membresías deciden qué contenido existe):
+Solo se recuperan fragmentos de las áreas, y hasta el nivel, que las membresías del usuario
+permiten (`security.access`). Se aplica como filtro de Qdrant y se verifica otra vez sobre
+lo recuperado. Las membresías las fija la API desde la sesión (`state["memberships"]`); si
+faltan o no son válidas, no se recupera nada (falla cerrada). Lo que el usuario no puede ver
+es indistinguible de lo que no existe: el flujo aborta con la misma respuesta de "sin
+información".
 
 REGLA CRITICA #1 (cero alucinaciones - parte 1/2):
 Si no queda ningún fragmento relevante, marca retrieval_ok=False.
@@ -41,9 +42,11 @@ from qdrant_client import AsyncQdrantClient
 from pipeline_ai.config import settings
 from pipeline_ai.embeddings import TaskPrefixedOllamaEmbeddings
 from pipeline_ai.privacy.outbound_gateway import assign_source_aliases
+from pipeline_ai.privacy.sensitivity import Sensitivity
 from pipeline_ai.retrieval.hybrid_store import Candidate, HybridStore
 from pipeline_ai.retrieval.judge import JudgeUnavailable, judge_relevance
-from pipeline_ai.security.access import allowed_domains, can_view_document
+from pipeline_ai.security.access import access_filter, can_view_document
+from pipeline_ai.security.areas import fragment_area, fragment_sensitivity, from_state
 from pipeline_ai.state import Citation, MHIAState
 
 log = logging.getLogger("mhia.retriever")
@@ -110,24 +113,26 @@ async def _select(query: str, candidates: list[Candidate]) -> list[Candidate]:
 
 async def retriever_node(state: MHIAState) -> dict:
     query = state["query"]
-    role = state.get("role")
+    memberships = from_state(state.get("memberships"))
 
-    domains = allowed_domains(role)
-    if not domains:
-        # Sin rol válido no se consulta ni la base: falla cerrada.
-        log.warning("Recuperación omitida: el rol no puede ver ningún dominio.")
+    flt = access_filter(memberships)
+    if flt is None:
+        # Sin membresías válidas no se consulta ni la base: falla cerrada.
+        log.warning("Recuperación omitida: el usuario no tiene áreas visibles.")
         return dict(_NOTHING)
 
     results = await _get_store().search(
-        query, domains=domains, k=max(1, settings.retrieval_candidates)
+        query, access_filter=flt, k=max(1, settings.retrieval_candidates)
     )
 
     # Segunda capa: aunque el filtro de la base falle o se altere, lo que no es visible para
-    # este rol se descarta aquí, antes de juzgar o de armar contexto.
-    visible = [(doc, score) for doc, score in results if can_view_document(role, doc.metadata)]
+    # este usuario se descarta aquí, antes de juzgar o de armar contexto.
+    visible = [
+        (doc, score) for doc, score in results if can_view_document(memberships, doc.metadata)
+    ]
     if len(visible) != len(results):
         log.error(
-            "El filtro de Qdrant dejó pasar %d fragmento(s) no permitidos para el rol; "
+            "El filtro de Qdrant dejó pasar %d fragmento(s) no permitidos para el usuario; "
             "se descartaron.",
             len(results) - len(visible),
         )
@@ -172,20 +177,23 @@ async def retriever_node(state: MHIAState) -> dict:
     # Segunda capa de confidencialidad (defensa en profundidad): el router
     # (pipeline_ai/nodes/router.py) clasifica confidencialidad SOLO a partir de la
     # pregunta del usuario, que puede ser ambigua o genérica ("resume este
-    # documento"). Aquí revisamos de qué carpeta/dominio viene cada chunk
-    # REALMENTE recuperado (ver pipeline_ai/ingestion/domain_mapping.py, inferido
-    # de la carpeta de departamento en Drive). Si cualquiera de las dos
-    # señales dice "confidencial", se anonimiza - nunca se relaja lo que
-    # el router ya decidió, solo se puede volver más estricto.
-    content_domains = {doc.metadata.get("domain") for doc in docs}
-    is_confidential_by_content = bool(content_domains & set(settings.confidential_domains))
+    # documento"). Aquí se toma la sensibilidad REAL de cada fragmento recuperado
+    # (mínima de su área y su etiqueta, security.areas.fragment_sensitivity). La
+    # máxima viaja en `content_sensitivity` hasta la pasarela de salida: CONFIDENTIAL
+    # obliga a anonimizar y RESTRICTED impide el envío a Claude. Nunca se relaja lo
+    # que el router ya decidió, solo se puede volver más estricto.
+    content_sensitivity = max(
+        (fragment_sensitivity(doc.metadata) for doc in docs), default=Sensitivity.CONFIDENTIAL
+    )
+    is_confidential_by_content = content_sensitivity >= Sensitivity.CONFIDENTIAL
     is_confidential = state.get("is_confidential", False) or is_confidential_by_content
 
     if is_confidential_by_content and not state.get("is_confidential", False):
         log.info(
-            "Confidencialidad elevada por contenido recuperado (dominios de carpeta: %s), "
+            "Confidencialidad elevada por contenido recuperado (áreas: %s, nivel %s), "
             "aunque el router había clasificado la consulta como no confidencial.",
-            content_domains,
+            sorted({(a.value if (a := fragment_area(doc.metadata)) else "?") for doc in docs}),
+            content_sensitivity.name,
         )
 
     return {
@@ -195,4 +203,5 @@ async def retriever_node(state: MHIAState) -> dict:
         "raw_context": raw_context,
         "source_aliases": source_aliases,
         "is_confidential": is_confidential,
+        "content_sensitivity": int(content_sensitivity),
     }

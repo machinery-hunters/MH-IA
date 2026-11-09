@@ -6,14 +6,19 @@ from types import SimpleNamespace
 from langchain_core.documents import Document
 from qdrant_client.http import models as qmodels
 
+from pipeline_ai.privacy.sensitivity import Sensitivity
 from pipeline_ai.retrieval.collection import (
     DENSE_VECTOR,
     SPARSE_VECTOR,
     build_point,
     is_hybrid,
 )
-from pipeline_ai.retrieval.hybrid_store import HybridStore, domain_filter, rrf_order
+from pipeline_ai.retrieval.hybrid_store import HybridStore, rrf_order
 from pipeline_ai.retrieval.lexical import query_sparse_vector
+from pipeline_ai.security.access import access_filter
+from pipeline_ai.security.areas import Area
+
+GENERAL = access_filter({Area.GENERAL: Sensitivity.INTERNAL})
 
 
 def _info(*, hybrid=True, named_dense=True):
@@ -80,9 +85,12 @@ def test_rrf_of_nothing_is_empty():
 # -- Consultas ---------------------------------------------------------------------------------
 
 
-async def test_both_queries_apply_the_same_domain_filter_and_use_their_own_vector():
+async def test_both_queries_apply_the_same_access_filter_and_use_their_own_vector():
     client = FakeClient(dense=[_point("a", 0.8)], sparse=[_point("a", 3.0)])
-    await _store(client).search("tarifas del flete", domains=("general", "ventas"), k=3)
+    flt = access_filter(
+        {Area.GENERAL: Sensitivity.INTERNAL, Area.COMERCIAL: Sensitivity.CONFIDENTIAL}
+    )
+    await _store(client).search("tarifas del flete", access_filter=flt, k=3)
 
     dense_call, sparse_call = client.calls
     assert dense_call["using"] == DENSE_VECTOR and dense_call["query"] == [0.1, 0.2, 0.3]
@@ -90,9 +98,7 @@ async def test_both_queries_apply_the_same_domain_filter_and_use_their_own_vecto
     indices, _ = query_sparse_vector("tarifas del flete")
     assert sparse_call["query"].indices == indices
     for call in client.calls:
-        condition = call["query_filter"].must[0]
-        assert condition.key == "metadata.domain"
-        assert set(condition.match.any) == {"general", "ventas"}
+        assert call["query_filter"] is flt  # el MISMO filtro de acceso en ambas
         assert call["with_payload"] is True
 
 
@@ -101,14 +107,14 @@ async def test_keywords_lift_a_candidate_the_dense_search_ranked_low():
         dense=[_point("a", 0.80), _point("b", 0.75), _point("c", 0.55)],
         sparse=[_point("c", 4.0)],
     )
-    result = await _store(client).search("pregunta", domains=("general",), k=3)
+    result = await _store(client).search("pregunta", access_filter=GENERAL, k=3)
 
     assert _sources(result) == ["c", "a", "b"]
 
 
 async def test_candidates_keep_their_cosine_and_lexical_only_ones_have_none():
     client = FakeClient(dense=[_point("a", 0.80)], sparse=[_point("a", 2.0), _point("solo", 5.0)])
-    result = await _store(client).search("pregunta", domains=("general",), k=5)
+    result = await _store(client).search("pregunta", access_filter=GENERAL, k=5)
 
     scores = {doc.metadata["source"].removeprefix("Google Drive: "): s for doc, s in result}
     assert scores == {"a": 0.80, "solo": None}
@@ -116,21 +122,21 @@ async def test_candidates_keep_their_cosine_and_lexical_only_ones_have_none():
 
 async def test_lexical_points_without_any_match_do_not_count():
     client = FakeClient(dense=[_point("a", 0.8), _point("b", 0.7)], sparse=[_point("b", 0.0)])
-    result = await _store(client).search("pregunta", domains=("general",), k=5)
+    result = await _store(client).search("pregunta", access_filter=GENERAL, k=5)
 
     assert _sources(result) == ["a", "b"]  # el score léxico 0 no adelanta a "b"
 
 
 async def test_the_result_is_capped_at_k():
     client = FakeClient(dense=[_point(str(i), 0.9 - i / 100) for i in range(10)])
-    result = await _store(client).search("pregunta", domains=("general",), k=3)
+    result = await _store(client).search("pregunta", access_filter=GENERAL, k=3)
 
     assert len(result) == 3
 
 
 async def test_a_query_without_useful_terms_skips_the_lexical_search():
     client = FakeClient(dense=[_point("a", 0.8)])
-    result = await _store(client).search("¿qué es lo de la?", domains=("general",), k=3)
+    result = await _store(client).search("¿qué es lo de la?", access_filter=GENERAL, k=3)
 
     assert [c["using"] for c in client.calls] == [DENSE_VECTOR]
     assert _sources(result) == ["a"]
@@ -144,7 +150,7 @@ async def test_points_without_a_valid_payload_are_skipped():
             _point("sin_metadata", 0.7, payload={"page_content": "x"}),
         ]
     )
-    result = await _store(client).search("pregunta", domains=("general",), k=5)
+    result = await _store(client).search("pregunta", access_filter=GENERAL, k=5)
 
     assert _sources(result) == ["a"]
 
@@ -152,8 +158,8 @@ async def test_points_without_a_valid_payload_are_skipped():
 async def test_the_collection_schema_is_checked_once(caplog):
     client = FakeClient(dense=[_point("a", 0.8)])
     store = _store(client)
-    await store.search("uno", domains=("general",), k=2)
-    await store.search("dos", domains=("general",), k=2)
+    await store.search("uno", access_filter=GENERAL, k=2)
+    await store.search("dos", access_filter=GENERAL, k=2)
 
     assert client.info_calls == 1
 
@@ -164,11 +170,11 @@ async def test_the_collection_schema_is_checked_once(caplog):
 async def test_a_legacy_collection_is_searched_dense_only_and_warns(caplog):
     client = FakeClient(dense=[_point("a", 0.8), _point("b", 0.7)], hybrid=False)
     with caplog.at_level(logging.WARNING):
-        result = await _store(client).search("tarifas", domains=("general",), k=5)
+        result = await _store(client).search("tarifas", access_filter=GENERAL, k=5)
 
     [call] = client.calls
     assert call["using"] is None  # vector sin nombre
-    assert call["query_filter"].must[0].key == "metadata.domain"  # el RBAC sigue aplicando
+    assert call["query_filter"] is GENERAL  # el control de acceso sigue aplicando
     assert _sources(result) == ["a", "b"]
     assert "no tiene vectores híbridos" in caplog.text
 
@@ -195,10 +201,3 @@ def test_build_point_carries_both_vectors_and_the_original_payload():
     assert isinstance(sparse, qmodels.SparseVector)
     assert sparse.indices and len(sparse.indices) == len(sparse.values)
     assert point.payload == {"page_content": doc.page_content, "metadata": doc.metadata}
-
-
-def test_domain_filter_lists_the_allowed_domains():
-    condition = domain_filter(["general", "ventas"]).must[0]
-
-    assert condition.key == "metadata.domain"
-    assert condition.match.any == ["general", "ventas"]

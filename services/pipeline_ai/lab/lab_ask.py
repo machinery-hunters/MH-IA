@@ -34,7 +34,8 @@ from pipeline_ai.graph import mhia_graph
 QUESTION_TIMEOUT_S = 180
 # Rol con el que se hacen las preguntas. Sin rol el grafo falla cerrado (no recupera nada), asi
 # que el laboratorio debe fijar uno. Por defecto ve todos los dominios (lo que esperan los
-# resultados de questions.json); LAB_ROLE=consulta sirve para ver el filtro por rol.
+# resultados de questions.json); LAB_ROLE=consulta sirve para ver el filtro por área
+# (las áreas salen de _env.lab_memberships).
 LAB_ROLE = os.environ.get("LAB_ROLE", "control_total")
 QUESTIONS_FILE = _env.LAB_DIR / "questions.json"
 CANARIES_FILE = _env.LAB_DIR / "canaries.txt"
@@ -97,6 +98,7 @@ async def run_one(question: dict, canaries: list[str]) -> dict:
                     "query": question["query"],
                     "session_id": str(uuid.uuid4()),
                     "role": LAB_ROLE,
+                    "memberships": _env.lab_memberships(LAB_ROLE),
                 }
             ),
             timeout=QUESTION_TIMEOUT_S,

@@ -42,10 +42,15 @@ class MHIAState(TypedDict, total=False):
     session_id: str
     # Rol del usuario autenticado (lo fija la API, nunca el cliente).
     role: str
+    # Membresías por área del usuario, {"comercial": 2} (security.areas.to_state). Las fija
+    # la API desde la base; deciden qué fragmentos existen para la consulta.
+    memberships: dict[str, int]
 
     # -- Clasificación / enrutamiento ---------------------------------------
     # decidido por el router_node (ejecutado siempre en Ollama, nunca en Claude)
     is_confidential: bool
+    # Sensibilidad máxima (int de Sensitivity) del contenido recuperado; la fija el retriever.
+    content_sensitivity: int
     route: Literal["local_only", "retrieve_then_reason", "clarify"]
     data_domain: Literal["ventas", "inventario", "proveedores", "administracion", "general"]
 

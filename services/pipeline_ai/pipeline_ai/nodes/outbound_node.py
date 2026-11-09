@@ -29,15 +29,29 @@ _BLOCKED_ANSWER = (
     "Reformula la consulta sin datos personales ni cifras exactas, o inténtalo "
     "de nuevo."
 )
+# Contenido RESTRICTED (RH, documentos financieros marcados): nunca sale de la red local.
+_RESTRICTED_ANSWER = (
+    "La información que responde esta consulta es de acceso restringido y no puede enviarse "
+    "al servicio de razonamiento externo. Las respuestas sobre información restringida se "
+    "darán solo con el modelo local."
+)
 
 
 def sensitivity_for_state(state: MHIAState) -> Sensitivity:
-    """Máximo entre el dominio de negocio y la marca de confidencialidad del
-    router/retriever. Sin dominio -> CONFIDENTIAL (falla cerrada)."""
+    """Máximo entre el dominio de la consulta (router), la marca de confidencialidad y la
+    sensibilidad real del contenido recuperado (retriever). Sin dominio -> CONFIDENTIAL
+    (falla cerrada). Contenido RESTRICTED -> la pasarela bloquea el envío a Claude."""
     flagged = (
         Sensitivity.CONFIDENTIAL if state.get("is_confidential", False) else Sensitivity.PUBLIC
     )
-    return effective_sensitivity(sensitivity_for_domain(state.get("data_domain")), flagged)
+    levels = [sensitivity_for_domain(state.get("data_domain")), flagged]
+    raw = state.get("content_sensitivity")
+    if raw is not None:
+        try:
+            levels.append(Sensitivity(int(raw)))
+        except (TypeError, ValueError):
+            levels.append(Sensitivity.RESTRICTED)  # valor corrupto: lo más estricto
+    return effective_sensitivity(*levels)
 
 
 async def outbound_gateway_node(state: MHIAState) -> dict:
@@ -59,6 +73,10 @@ async def outbound_gateway_node(state: MHIAState) -> dict:
             "outbound": None,
             "aborted": True,
             "abort_reason": f"envio_bloqueado: {', '.join(blocked.reasons)}",
-            "final_answer": _BLOCKED_ANSWER,
+            "final_answer": (
+                _RESTRICTED_ANSWER
+                if "sensibilidad_restringida" in blocked.reasons
+                else _BLOCKED_ANSWER
+            ),
         }
     return {"outbound": payload}

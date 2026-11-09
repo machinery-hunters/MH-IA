@@ -57,7 +57,9 @@ def get_current_principal(request: Request) -> Principal:
         role = Role(info.role)
     except ValueError:
         raise _unauthorized() from None
-    return Principal(user_id=info.user_id, role=role, username=info.username)
+    return Principal(
+        user_id=info.user_id, role=role, username=info.username, memberships=info.memberships
+    )
 
 
 def require_permission(permission: Permission) -> Callable[..., Principal]:

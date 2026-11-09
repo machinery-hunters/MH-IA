@@ -7,18 +7,24 @@ from pipeline_ai.agents.supervisor import consolidate, should_abort
 from pipeline_ai.config import settings
 from pipeline_ai.connectors.base import ConnectorSpec, RawExtraction
 from pipeline_ai.privacy.sensitivity import Sensitivity
+from pipeline_ai.security.areas import Area
 from pipeline_ai.sources import SourceResult, SourceStatus
 
 RAW = "Cliente Acme S.A. debe $1,250,000.00 por el contrato 034"
+COMERCIAL = {Area.COMERCIAL: Sensitivity.CONFIDENTIAL, Area.GENERAL: Sensitivity.INTERNAL}
+SOLO_INTERNO = {Area.COMERCIAL: Sensitivity.INTERNAL, Area.GENERAL: Sensitivity.INTERNAL}
 
 
 class FakeConnector:
-    def __init__(self, behavior="ok", sensitivity=Sensitivity.CONFIDENTIAL, required=()):
+    def __init__(
+        self, behavior="ok", sensitivity=Sensitivity.CONFIDENTIAL, required=(), areas=None
+    ):
         self.behavior = behavior
         self.spec = ConnectorSpec(
             name="fake",
             display_name="Fake",
             default_sensitivity=sensitivity,
+            areas=(Area.COMERCIAL,) if areas is None else areas,
             required_settings=required,
             timeout_setting="timeout_erp_s",
         )
@@ -45,7 +51,7 @@ def short_timeout(monkeypatch):
 
 
 async def test_ok_confidential_returns_only_anonymized_text():
-    r = await run_subagent(FakeConnector(), "q", role="lider", anonymize=anonymize_ok)
+    r = await run_subagent(FakeConnector(), "q", memberships=COMERCIAL, anonymize=anonymize_ok)
     assert r.status is SourceStatus.OK
     assert r.context == "Cliente_A debe Monto_X por el Folio_X"
     assert "Acme" not in r.context and "1,250,000" not in r.context
@@ -60,25 +66,32 @@ async def test_internal_level_passes_through_without_anonymizer():
         return "x"
 
     r = await run_subagent(
-        FakeConnector(sensitivity=Sensitivity.INTERNAL), "q", role="consulta", anonymize=spy
+        FakeConnector(sensitivity=Sensitivity.INTERNAL),
+        "q",
+        memberships=SOLO_INTERNO,
+        anonymize=spy,
     )
     assert r.ok and r.context == RAW and not called
 
 
 async def test_timeout_is_isolated():
-    r = await run_subagent(FakeConnector("slow"), "q", role="lider", anonymize=anonymize_ok)
+    r = await run_subagent(
+        FakeConnector("slow"), "q", memberships=COMERCIAL, anonymize=anonymize_ok
+    )
     assert r.status is SourceStatus.TIMEOUT
 
 
 async def test_exception_does_not_escape_and_does_not_leak_message():
-    r = await run_subagent(FakeConnector("boom"), "q", role="lider", anonymize=anonymize_ok)
+    r = await run_subagent(
+        FakeConnector("boom"), "q", memberships=COMERCIAL, anonymize=anonymize_ok
+    )
     assert r.status is SourceStatus.UNAVAILABLE
     assert r.detail == "ValueError"
     assert "Acme" not in r.detail and r.context == ""
 
 
 async def test_anonymizer_failure_fails_closed_never_returns_raw():
-    r = await run_subagent(FakeConnector(), "q", role="lider", anonymize=anonymize_boom)
+    r = await run_subagent(FakeConnector(), "q", memberships=COMERCIAL, anonymize=anonymize_boom)
     assert r.status is SourceStatus.UNAVAILABLE
     assert r.context == ""
     assert "Acme" not in r.detail and "1,250,000" not in r.detail
@@ -88,20 +101,36 @@ async def test_missing_credentials_is_not_configured_and_does_not_connect():
     r = await run_subagent(
         FakeConnector("boom", required=("erpnext_api_key",)),
         "q",
-        role="lider",
+        memberships=COMERCIAL,
         anonymize=anonymize_ok,
     )
     # sin credenciales, `boom` ni siquiera se ejecuta
     assert r.status is SourceStatus.NOT_CONFIGURED
 
 
-async def test_role_without_permission_is_forbidden_before_querying():
-    r = await run_subagent(FakeConnector("boom"), "q", role="consulta", anonymize=anonymize_ok)
+async def test_membership_below_the_source_level_is_forbidden_before_querying():
+    r = await run_subagent(
+        FakeConnector("boom"), "q", memberships=SOLO_INTERNO, anonymize=anonymize_ok
+    )
     assert r.status is SourceStatus.FORBIDDEN
 
 
-async def test_unknown_role_is_forbidden():
-    r = await run_subagent(FakeConnector(), "q", role=None, anonymize=anonymize_ok)
+async def test_no_memberships_is_forbidden():
+    r = await run_subagent(FakeConnector(), "q", memberships={}, anonymize=anonymize_ok)
+    assert r.status is SourceStatus.FORBIDDEN
+
+
+async def test_membership_in_another_area_is_forbidden():
+    otra = {Area.FINANZAS: Sensitivity.RESTRICTED}
+    r = await run_subagent(FakeConnector("boom"), "q", memberships=otra, anonymize=anonymize_ok)
+    assert r.status is SourceStatus.FORBIDDEN
+
+
+async def test_a_source_without_areas_is_usable_by_nobody():
+    todo = {a: Sensitivity.RESTRICTED for a in Area}
+    r = await run_subagent(
+        FakeConnector("boom", areas=()), "q", memberships=todo, anonymize=anonymize_ok
+    )
     assert r.status is SourceStatus.FORBIDDEN
 
 

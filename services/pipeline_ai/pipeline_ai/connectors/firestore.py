@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pipeline_ai.connectors.base import ConnectorSpec, RawExtraction
 from pipeline_ai.privacy.sensitivity import Sensitivity
+from pipeline_ai.security.areas import Area
 
 
 class FirestoreConnector:
@@ -18,6 +19,7 @@ class FirestoreConnector:
         name="firestore",
         display_name="Firestore / Supabase (SourcingBot)",
         default_sensitivity=Sensitivity.CONFIDENTIAL,
+        areas=(Area.SOURCING, Area.INVENTARIO),
         required_settings=("firestore_project_id",),
         timeout_setting="timeout_firestore_s",
         description="Portafolio de maquinaria aprobado y datos de SourcingBot.",

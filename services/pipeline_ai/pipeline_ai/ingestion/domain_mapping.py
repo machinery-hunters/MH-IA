@@ -1,18 +1,18 @@
 """
 domain_mapping
 
-Infiere el dominio de negocio (ventas | inventario | proveedores | administracion | proyectos |
-general) a partir de la carpeta de departamento en Google Drive donde vive un documento (el
-primer nivel de carpeta bajo la raíz compartida con MH IA), usando coincidencia de palabras
-clave, normalizado sin acentos y en minúsculas.
+Infiere el ÁREA de negocio (security.areas.Area: comercial, sourcing, finanzas, rh, ...) a
+partir de la carpeta de departamento en Google Drive donde vive un documento (el primer
+nivel de carpeta bajo la raíz compartida con MH IA), usando coincidencia de palabras clave,
+normalizado sin acentos y en minúsculas.
 
-El dominio decide DOS cosas: quién puede ver el contenido (RBAC, `security.access`) y si se
-anonimiza antes de ir a Claude (`privacy.sensitivity`). Por eso este módulo FALLA CERRADO:
+El área decide quién puede ver el contenido (membresías, `security.access`) y su
+sensibilidad mínima (`security.areas.AREA_MIN_SENSITIVITY`), que a su vez decide si se
+anonimiza o si ni siquiera puede salir a Claude. Por eso este módulo FALLA CERRADO:
 
   - Una carpeta cuyo nombre no coincide con ninguna palabra clave NO cae en "general" (que ve
-    hasta el rol `consulta`): devuelve UNCLASSIFIED, y la ingesta no indexa ese archivo hasta
-    que alguien decida su dominio aquí. Así un departamento nuevo (RH, Dirección, Legal...)
-    nunca queda expuesto por omisión.
+    cualquier usuario): devuelve UNCLASSIFIED, y la ingesta no indexa ese archivo hasta que
+    alguien decida su área aquí. Así un departamento nuevo nunca queda expuesto por omisión.
   - Los archivos sueltos en la raíz compartida tampoco tienen departamento: UNCLASSIFIED.
   - "general" solo se asigna si la carpeta lo dice explícitamente (ver _KEYWORDS).
 
@@ -25,10 +25,21 @@ import unicodedata
 # Marcador de "sin decisión": no es un dominio válido ni visible para ningún rol.
 UNCLASSIFIED = "sin_clasificar"
 
-# El orden importa: se devuelve el primer dominio que coincide. "general" va al final y solo
-# por nombres explícitos.
+# El orden importa: se devuelve la primera área que coincide. Las áreas más delicadas van
+# primero (una carpeta "Nómina Finanzas" es de RH, no de Finanzas) y "general" va al final y
+# solo por nombres explícitos.
 _KEYWORDS: dict[str, tuple[str, ...]] = {
-    "ventas": ("venta", "comercial", "cotizacion", "cliente"),
+    "rh": ("rh", "rrhh", "humano", "nomina", "personal"),
+    "finanzas": (
+        "administracion",
+        "finanzas",
+        "contable",
+        "contabilidad",
+        "fiscal",
+        "tesoreria",
+    ),
+    "direccion": ("direccion", "consejo"),
+    "comercial": ("venta", "comercial", "cotizacion", "cliente"),
     "inventario": (
         "inventario",
         "subasta",
@@ -37,20 +48,14 @@ _KEYWORDS: dict[str, tuple[str, ...]] = {
         "equipo",
         "maquinaria",
     ),
-    "proveedores": ("proveedor", "consignante", "compras", "sourcing"),
-    "administracion": (
-        "administracion",
-        "finanzas",
-        "contable",
-        "contabilidad",
-        "fiscal",
-        "nomina",
-    ),
-    # Decisión del negocio (20 oct 2026): los proyectos son confidenciales; los ven líder,
-    # configuración y control total, no `consulta`.
+    "sourcing": ("proveedor", "consignante", "compras", "sourcing", "websourcing"),
+    # Decisión del negocio (20 oct 2026): los proyectos son confidenciales.
     "proyectos": ("proyecto",),
-    # Confirmado con el negocio: logística no contiene datos de clientes ni cifras financieras.
-    "general": ("general", "publico", "logistica"),
+    # Antes caía en "general"; con el modelo por área es un área propia (plan §2.5.1).
+    "logistica": ("logistica", "embarque", "transporte", "flete"),
+    "marketing": ("marketing", "mercadotecnia", "publicidad"),
+    "taller": ("taller", "mantenimiento", "refaccion"),
+    "general": ("general", "publico"),
 }
 
 
@@ -60,13 +65,13 @@ def _normalize(text: str) -> str:
     return text
 
 
-def infer_domain_from_folder_path(folder_path: list[str]) -> str:
+def infer_area_from_folder_path(folder_path: list[str]) -> str:
     """folder_path: nombres de carpeta desde la raíz compartida hasta el archivo (sin incluir
     el archivo mismo). Solo se usa el primer nivel (carpeta de departamento).
 
     Compara por PALABRA completa (tokenizada), no por substring del nombre de carpeta entero:
     "venta" es substring de "inventario" (in-VENTA-rio), así que un match ingenuo clasificaría
-    mal "Inventario" como "ventas". Aquí se exige que alguna palabra del nombre de carpeta
+    mal "Inventario" como "comercial". Aquí se exige que alguna palabra del nombre de carpeta
     EMPIECE CON la palabra clave (para tolerar plurales: "venta" matchea "ventas", pero no
     "inventario").
 
@@ -77,8 +82,8 @@ def infer_domain_from_folder_path(folder_path: list[str]) -> str:
     department = _normalize(folder_path[0])
     words = re.findall(r"\w+", department)
 
-    for domain, keywords in _KEYWORDS.items():
+    for area, keywords in _KEYWORDS.items():
         if any(word.startswith(kw) for word in words for kw in keywords):
-            return domain
+            return area
 
     return UNCLASSIFIED

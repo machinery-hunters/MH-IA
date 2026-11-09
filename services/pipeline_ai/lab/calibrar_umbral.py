@@ -26,7 +26,8 @@ import _env  # DEBE ir antes que pipeline_ai: fija QDRANT_URL/COLLECTION antes d
 
 # isort: split
 from pipeline_ai.nodes.retriever_node import _get_store
-from pipeline_ai.security.access import allowed_domains
+from pipeline_ai.security.access import access_filter
+from pipeline_ai.security.areas import from_state
 
 QUESTIONS_FILE = _env.LAB_DIR / "retrieval_golden.json"
 CANDIDATES = (0.50, 0.55, 0.60, 0.62, 0.64, 0.66, 0.68, 0.70, 0.72)
@@ -39,12 +40,12 @@ def _short(source: str) -> str:
 
 async def _measure() -> list[dict]:
     store = _get_store()
-    domains = allowed_domains("control_total")  # sin filtro de rol: se mide el ranking
+    flt = access_filter(from_state(_env.lab_memberships("control_total")))  # todo: el ranking
     questions = json.loads(QUESTIONS_FILE.read_text(encoding="utf-8"))
     rows: list[dict] = []
     for question in questions:
         expected = question["expected_sources"]
-        results = await store.search(question["query"], domains=domains, k=K)
+        results = await store.search(question["query"], access_filter=flt, k=K)
         ranking = sorted(
             (
                 (_short(doc.metadata.get("source", "?")), float(score))

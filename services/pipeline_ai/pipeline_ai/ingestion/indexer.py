@@ -38,7 +38,7 @@ from qdrant_client.http import models as qmodels
 from pipeline_ai.config import settings
 from pipeline_ai.embeddings import TaskPrefixedOllamaEmbeddings
 from pipeline_ai.ingestion.chunker import chunk_file
-from pipeline_ai.ingestion.domain_mapping import UNCLASSIFIED, infer_domain_from_folder_path
+from pipeline_ai.ingestion.domain_mapping import UNCLASSIFIED, infer_area_from_folder_path
 from pipeline_ai.ingestion.drive_client import DriveClient, DriveFile
 from pipeline_ai.ingestion.loaders import extract_text
 from pipeline_ai.retrieval.collection import build_point, create_collection, is_hybrid
@@ -145,17 +145,17 @@ class Indexer:
             seen_ids.add(file.file_id)
             prev = manifest.get(file.file_id)
 
-            # Falla cerrada: sin dominio asignado nadie podría verlo (RBAC) y no se debe
+            # Falla cerrada: sin área asignada nadie podría verlo y no se debe
             # indexar a ciegas. No entra al manifest: al mapear su carpeta, el siguiente sync
             # lo indexa solo. Si ya estaba indexado (carpeta renombrada), se retira.
-            if infer_domain_from_folder_path(file.folder_path) == UNCLASSIFIED:
+            if infer_area_from_folder_path(file.folder_path) == UNCLASSIFIED:
                 unclassified += 1
                 if prev:
                     self._delete_file_chunks(file.file_id)
                     del manifest[file.file_id]
                 log.warning(
-                    "Sin dominio: la carpeta '%s' no está en domain_mapping.py; el archivo "
-                    "NO se indexa hasta asignarle un dominio.",
+                    "Sin área: la carpeta '%s' no está en domain_mapping.py; el archivo "
+                    "NO se indexa hasta asignarle un área.",
                     "/".join(file.folder_path) or "(raíz)",
                 )
                 continue
@@ -175,13 +175,13 @@ class Indexer:
                     "n_chunks": n_chunks,
                 }
                 indexed += 1
-                domain = infer_domain_from_folder_path(file.folder_path)
+                area = infer_area_from_folder_path(file.folder_path)
                 log.info(
-                    "Indexado: %s (%d chunks, carpeta=%s, dominio=%s)",
+                    "Indexado: %s (%d chunks, carpeta=%s, área=%s)",
                     file.name,
                     n_chunks,
                     "/".join(file.folder_path) or "(raíz)",
-                    domain,
+                    area,
                 )
             except Exception:
                 failed += 1
@@ -196,7 +196,7 @@ class Indexer:
 
         _save_manifest(manifest)
         log.info(
-            "Sync completo. indexados=%d, sin_cambios=%d, fallidos=%d, sin_dominio=%d, "
+            "Sync completo. indexados=%d, sin_cambios=%d, fallidos=%d, sin_area=%d, "
             "eliminados=%d",
             indexed,
             skipped,
