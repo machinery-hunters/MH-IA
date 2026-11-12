@@ -671,7 +671,7 @@ pantallas de administración de usuarios y áreas, y CSP con nonce.
 | Robo de sesión o credencial | Phishing, equipo comprometido | argon2id, sesiones en servidor, TOTP en `control_total` y en quien ve CONFIDENTIAL (bloque 5), cierre de sesiones propias desde la GUI, cookie `httpOnly` + `SameSite=Strict` | Passkeys | F5 |
 | Abuso por usuario autenticado | Extracción masiva de datos | Concurrencia y timeout por consulta | Rate limit por usuario, alerta por volumen anómalo, auditoría de fuentes vistas | F1 |
 | Exposición de red | Puerto abierto, servicio mal publicado | Solo `127.0.0.1`, sin puertos de Qdrant ni Ollama | Tailscale con grants, prueba automática de que nada escucha fuera de `127.0.0.1` | F0, F6 |
-| Cadena de suministro | Paquete o imagen comprometidos, modelo alterado | `pip-audit` y `npm audit` limpios hoy | Lockfiles, imágenes por digest, Dependabot, Trivy en CI, modelos por etiqueta exacta | F1 |
+| Cadena de suministro | Paquete o imagen comprometidos, modelo alterado | `pip-audit` y `npm audit` limpios hoy | Lockfiles, imágenes por digest, Dependabot, Trivy y auditoría de dependencias en CI (**hecho**, bloque 6), modelos por etiqueta exacta | F1 |
 | Robo o pérdida de la Mac | Acceso físico | — | FileVault, ubicación con acceso controlado, backups cifrados | F0 |
 | Pérdida de datos | Falla de disco, error humano | — | Backups diarios con simulacro mensual | F0 |
 | Insider con privilegios | `control_total` abusado | Rol más restringido, TOTP | Auditoría con hash encadenado, alerta en cambios de configuración, revisión mensual | F1 |
@@ -756,6 +756,7 @@ secretos en verde.
 | 3 | Rate limit por persona, cambio de contraseña y bloqueo por intentos | #18 | Sí |
 | 4 | Registro de auditoría encadenado (admin, acceso, consulta) y verificación contra respaldos | #19 | Sí |
 | 5 | Segundo factor obligatorio para áreas CONFIDENTIAL o más, activación desde la GUI con QR, sesiones propias y cerrar las demás | #20 | Sí: activación, sesiones, filtro por área y respuesta local con fuente citada |
+| 6 | Escaneo en CI (cada PR y cada lunes): `pip-audit`, `npm audit` y Trivy sobre las imágenes; parches de Debian en la API y GUI sin npm en ejecución | #22 | No aplica (solo CI e imágenes) |
 
 **Cambio de rumbo (rev. 3):** Fernando pidió que la administración diaria no
 dependa de la CLI, que solo el líder técnico agregue personas e integraciones, y
@@ -768,7 +769,7 @@ para que las pantallas nuevas nazcan ya con la dirección visual elegida.
 
 | Bloque | Fase | Contenido | Fechas estimadas |
 |---|---|---|---|
-| 6 | F1 | Escaneo en CI: `pip-audit`, `npm audit` y Trivy sobre las imágenes; Dependabot | 13 al 16 de noviembre |
+| 6 | F1 | Escaneo en CI: `pip-audit`, `npm audit` y Trivy sobre las imágenes (**hecho**, 12 nov) | 13 al 16 de noviembre |
 | 7 | F1 | **Pasada visual**: tokens de color y tipografía de la dirección elegida (`docs/GUI_DIRECCION_VISUAL.md`), login, consultar y cuenta; sin tocar seguridad | 17 al 24 de noviembre |
 | 8 | F1 | Área por correo del dueño en Drive y `allowed_roles` por documento; pruebas de mutación del filtro | 24 de noviembre al 4 de diciembre |
 | 9 | F1b | Consola `/sistema`: **Personas y áreas** (alta, baja, rol, áreas, segundo factor, sesiones, desbloqueo) y **Registro** con filtros | 7 al 16 de diciembre |
@@ -827,7 +828,7 @@ Bloques 1 a 5 hechos (7.0); faltan los bloques 6 a 8 (7.1).
 - Auditoría con hash encadenado; logs sin nombres de documentos.
 - Rate limit por usuario; cambio de contraseña; TOTP para roles con datos
   confidenciales (**hechos**, bloques 3 y 5).
-- Lockfiles, imágenes por digest, Dependabot y Trivy en CI (bloque 6).
+- Lockfiles, imágenes por digest, Dependabot y Trivy en CI (**hecho**, bloque 6).
 - Pasada visual con la dirección elegida (bloque 7).
 - Ollama nativo también en la laptop (paridad).
 

@@ -7,6 +7,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Parches de seguridad de Debian publicados después de la imagen base (Trivy en CI
+# los exige): la imagen oficial tarda días en reconstruirse tras un aviso.
+RUN apt-get update --error-on=any \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 # Dependencias exactas con hash (requirements.lock): la misma versión de cada
 # paquete en la laptop, en el CI y en la Mac. Regenerar: make lock / dev.ps1 lock
 COPY requirements.lock .
