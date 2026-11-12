@@ -124,6 +124,13 @@ class Settings:
     # acumulan.
     query_timeout_s: float = float(os.getenv("QUERY_TIMEOUT_S", "120"))
     query_max_concurrency: int = int(os.getenv("QUERY_MAX_CONCURRENCY", "2"))
+    # Límite por persona: como máximo QUERY_RATE_LIMIT consultas en QUERY_RATE_WINDOW_S
+    # segundos (ventana deslizante, en memoria del proceso de la API). 0 lo desactiva.
+    query_rate_limit: int = int(os.getenv("QUERY_RATE_LIMIT", "10"))
+    query_rate_window_s: float = float(os.getenv("QUERY_RATE_WINDOW_S", "60"))
+    # Cuántos identificadores de fragmento se guardan por consulta en el registro de auditoría
+    # (el total siempre queda).
+    audit_max_chunks: int = int(os.getenv("AUDIT_MAX_CHUNKS", "20"))
 
     # ── API / acceso ─────────────────────────────────────────────────────
     # Secreto para firmar sesiones. OBLIGATORIO (>= 32 caracteres) en producción.

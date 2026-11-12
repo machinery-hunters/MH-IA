@@ -121,12 +121,12 @@ su estado y se mueven sus decisiones a esos documentos.
 
 | # | Hueco | Fase que lo cierra |
 |---|---|---|
-| 1 | Cambio de contraseña, passkeys, auditoría de autenticación | F1 (contraseña, auditoría) y F5 (passkeys) |
-| 2 | Nombres de documentos en logs INFO | F1 |
+| 1 | Cambio de contraseña, passkeys, auditoría de autenticación | F1 (contraseña y auditoría: **hechos**, bloque 4) y F5 (passkeys) |
+| 2 | Nombres de documentos en logs INFO | F1 (**hecho**, bloque 4) |
 | 3 | Nombres no detectados por el modelo local | F2 (entidades en ingesta + mejor modelo) |
 | 4 | Filtro solo por dominio, sin áreas ni `allowed_roles` | **F1** |
-| 5 | Auditoría sin almacén ni integridad | F1 |
-| 6 | Sin rate limiting general | F1 |
+| 5 | Auditoría sin almacén ni integridad | F1 (**hecho**, bloque 4; falta anclar la cabeza fuera del equipo) |
+| 6 | Sin rate limiting general | F1 (consulta por persona: **hecho**, bloque 4) |
 | 7 | Inyección de instrucciones vía documentos | F2 (prueba adversarial) |
 | 8 | Eval del router al 89 % | F2 |
 | 9 | Listas blancas de campos de ERP/CRM/Firestore | F3 / F7 |
@@ -391,7 +391,7 @@ la consola de Anthropic.
 |---|---|---|
 | Qdrant | Fragmentos de Drive (vector denso + BM25) con payload `domain`, `sensitivity`, `allowed_areas`, `allowed_roles`, `owner_email` | Una colección por tipo de contenido; índices de payload en los campos de filtro |
 | Postgres (nuevo) | Usuarios, áreas, mapeo correo → área, configuración de conectores (sin secretos), auditoría | Entra en la fase 1. Auditoría en tabla solo de inserción, con un hash encadenado por fila para detectar alteraciones |
-| SQLite (`auth.db`) | Usuarios y sesiones | **Hecho (9 nov 2026, bloque 2b):** usuarios, áreas, sesiones y registro de cambios de permisos en Postgres; el `auth.db` se migra solo al primer arranque. SQLite queda solo para pruebas y desarrollo sin Docker. Pendiente: hash encadenado del registro, eventos de login y configuración de conectores (bloque 4 y siguientes) |
+| SQLite (`auth.db`) | Usuarios y sesiones | **Hecho (9 nov 2026, bloque 2b):** usuarios, áreas, sesiones y registro de cambios de permisos en Postgres; el `auth.db` se migra solo al primer arranque. SQLite queda solo para pruebas y desarrollo sin Docker. Hash encadenado del registro y eventos de login y de consulta: **hechos** (12 nov 2026, bloque 4). Pendiente: configuración de conectores |
 | Secretos | `.env` del host + `credentials/` | Fuera de git, fuera del backup común; respaldo en gestor de contraseñas |
 
 ---
@@ -657,6 +657,18 @@ estado, identificadores de fragmentos entregados, hash de lo enviado a Claude,
 resultado y latencia. Cada fila guarda el hash de la anterior para detectar
 alteraciones. Exportación mensual al backup. Acceso de lectura solo para
 `control_total`.
+
+> **Hecho (12 nov 2026, bloque 4):** tabla `audit_log` (Postgres; SQLite en
+> pruebas) con categorías `admin`, `acceso` y `consulta`, hash encadenado por fila
+> y disparadores de solo inserción. Cada consulta registra persona, rol, áreas,
+> sesión, huella y longitud, resultado, proveedor, identificadores de fragmentos
+> (también si la respuesta se bloquea), hash del payload de la pasarela y
+> latencia; si no se puede registrar, la respuesta no se entrega. Logins, fallos,
+> bloqueos, salidas y cambios de contraseña van al mismo registro. Los respaldos
+> llevan la cabeza de la cadena y `manage audit-verify --respaldo` detecta una
+> cadena rehecha o recortada. Hoy se consulta solo por CLI (`audit-log`, servidor);
+> la pantalla para `control_total`, la retención y anclar la cabeza fuera del
+> equipo siguen pendientes (SECURITY.md §3.5).
 
 ### 6.5 Gestión de secretos
 

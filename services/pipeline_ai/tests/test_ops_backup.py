@@ -301,7 +301,7 @@ def test_user_database_is_exported_as_json_without_sessions(store_env):
 
     manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     assert "auth.json" in manifest["files"] and "auth.db" not in manifest["files"]
-    assert manifest["auth"]["counts"] == {"users": 1, "memberships": 1, "admin_audit": 1}
+    assert manifest["auth"]["counts"] == {"users": 1, "memberships": 1, "audit_log": 1}
     data = json.loads((out / "auth.json").read_text(encoding="utf-8"))
     assert "sessions" not in data and "throttle" not in data
     assert backup.verify_backup(out) == []
@@ -317,13 +317,55 @@ def test_verify_detects_an_inconsistent_user_export(store_env):
     assert any("conteos" in p for p in backup.verify_backup(out))
 
 
+def _rewrite(path, mutate):
+    data = json.loads(path.read_text(encoding="utf-8"))
+    mutate(data)
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_manifest_records_the_head_of_the_audit_chain(store_env):
+    store = store_env[0]
+    out = _create_with_store(store_env)
+
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    check = store.verify_audit_chain()
+    assert manifest["auth"]["audit_head"] == {"id": check.head_id, "hash": check.head_hash}
+
+
+def test_verify_detects_an_audit_log_edited_inside_the_export(store_env):
+    out = _create_with_store(store_env)
+    export = out / "auth.json"
+    _rewrite(export, lambda d: d["audit_log"][0].update(actor="otro"))
+    # Quien edita el export también puede recalcular su sha256 en el manifest.
+    _rewrite(
+        out / "manifest.json",
+        lambda m: m["files"]["auth.json"].update(sha256=backup._sha256(export)),
+    )
+
+    problems = backup.verify_backup(out)
+
+    assert any("auditoría no es íntegro" in p for p in problems)
+
+
+def test_verify_detects_a_rebuilt_chain_that_does_not_match_the_manifest(store_env):
+    out = _create_with_store(store_env)
+    export = out / "auth.json"
+    _rewrite(export, lambda d: d.update(audit_log=[], audit_head={"id": 0, "hash": "0" * 64}))
+    _rewrite(
+        out / "manifest.json",
+        lambda m: m["files"]["auth.json"].update(sha256=backup._sha256(export)),
+    )
+
+    assert any("donde dice el manifest" in p for p in backup.verify_backup(out))
+
+
 def test_drill_reports_the_user_counts(store_env):
     _, _, qdrant, _ = store_env
     out = _create_with_store(store_env)
 
     report = backup.drill(out, qdrant_url="http://q", transport=qdrant.transport)
 
-    assert report["auth"] == {"users": 1, "memberships": 1, "admin_audit": 1}
+    assert report["auth"] == {"users": 1, "memberships": 1, "audit_log": 1}
 
 
 def test_restore_replaces_users_areas_and_audit_and_closes_sessions(store_env, make_user):
@@ -339,7 +381,7 @@ def test_restore_replaces_users_areas_and_audit_and_closes_sessions(store_env, m
         auth_store=store,
     )  # fmt: skip
 
-    assert report["auth"] == {"users": 1, "memberships": 1, "admin_audit": 1}
+    assert report["auth"] == {"users": 1, "memberships": 1, "audit_log": 1}
     assert [u.username for u in store.list_users()] == ["ana"]
     assert [e.action for e in store.list_admin_events()] == ["restaurar_respaldo", "crear_usuario"]
     assert store.list_admin_events()[0].detail == {"respaldo": out.name, "origen": "auth.json"}

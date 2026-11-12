@@ -22,6 +22,16 @@ def _judge_off_by_default(monkeypatch):
     monkeypatch.setattr(settings, "retrieval_judge_enabled", False)
 
 
+@pytest.fixture(autouse=True)
+def _auth_db_in_tmp(tmp_path, monkeypatch):
+    """Ninguna prueba escribe en la base real: toda consulta queda en el registro de
+    auditoría, y sin esto las pruebas que no piden `auth_env` abrirían /app/data/auth.db."""
+    monkeypatch.setattr(settings, "auth_db_path", str(tmp_path / "auth.db"))
+    monkeypatch.setattr(settings, "auth_backend", "sqlite")
+    yield
+    auth_store.close_store()
+
+
 class FakeClock:
     """Reloj controlable: `clock.now()` devuelve `t`; `advance()` viaja en el tiempo."""
 
@@ -112,7 +122,7 @@ def make_user(auth_env):
     return _make
 
 
-TABLES = ("users", "sessions", "memberships", "throttle", "admin_audit")
+TABLES = ("users", "sessions", "memberships", "throttle", "audit_log")
 
 
 def db_count(store, table: str) -> int:

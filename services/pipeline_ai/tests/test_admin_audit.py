@@ -102,14 +102,14 @@ def test_audit_log_command_shows_recent_changes(auth_env, make_user, admin):
 def test_audit_log_is_empty_at_first(auth_env):
     io = IO()
     assert io.run("audit-log") == 0
-    assert "sin cambios registrados" in io.text
+    assert "sin eventos registrados" in io.text
 
 
 def test_the_audit_table_is_append_only(auth_env):
     store = auth_env.store
     store.record_admin_event("cli:x", "prueba", "ana", {"a": 1})
 
-    for sql in ("UPDATE admin_audit SET actor = 'otro'", "DELETE FROM admin_audit"):
+    for sql in ("UPDATE audit_log SET actor = 'otro'", "DELETE FROM audit_log"):
         with pytest.raises(DB_ERRORS):
             with store.connection() as conn:
                 conn.execute(sql)
@@ -140,12 +140,19 @@ def test_export_and_import_round_trip(auth_env, make_user, tmp_path):
     ana = _populate(store, make_user)
     data = store.export_data()
 
-    assert set(data) == {"format", "schema_version", "users", "memberships", "admin_audit"}
+    assert set(data) == {
+        "format",
+        "schema_version",
+        "users",
+        "memberships",
+        "audit_log",
+        "audit_head",
+    }
     target = SqliteAuthStore(tmp_path / "copia.db")
     assert target.import_data(data, replace=False) == {
         "users": 1,
         "memberships": 1,
-        "admin_audit": 1,
+        "audit_log": 1,
     }
 
     assert target.get_user(ana.id) == store.get_user(ana.id)

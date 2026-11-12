@@ -114,7 +114,7 @@ class Indexer:
         docs = chunk_file(file, text)
 
         if not docs:
-            log.warning("Sin contenido extraíble: %s", file.name)
+            log.warning("Sin contenido extraíble: archivo %s", file.file_id)
             return 0
 
         vectors = self.embeddings.embed_documents([d.page_content for d in docs])
@@ -153,10 +153,13 @@ class Indexer:
                 if prev:
                     self._delete_file_chunks(file.file_id)
                     del manifest[file.file_id]
+                # Solo la carpeta de primer nivel (la que decide el área): las subcarpetas y el
+                # nombre del archivo pueden revelar contenido.
                 log.warning(
-                    "Sin área: la carpeta '%s' no está en domain_mapping.py; el archivo "
+                    "Sin área: la carpeta '%s' no está en domain_mapping.py; el archivo %s "
                     "NO se indexa hasta asignarle un área.",
-                    "/".join(file.folder_path) or "(raíz)",
+                    file.folder_path[0] if file.folder_path else "(raíz)",
+                    file.file_id,
                 )
                 continue
 
@@ -176,22 +179,17 @@ class Indexer:
                 }
                 indexed += 1
                 area = infer_area_from_folder_path(file.folder_path)
-                log.info(
-                    "Indexado: %s (%d chunks, carpeta=%s, área=%s)",
-                    file.name,
-                    n_chunks,
-                    "/".join(file.folder_path) or "(raíz)",
-                    area,
-                )
-            except Exception:
+                log.info("Indexado: archivo %s (%d chunks, área=%s)", file.file_id, n_chunks, area)
+            except Exception as exc:
                 failed += 1
-                log.exception("Fallo indexando %s", file.name)
+                # Sin traceback: el mensaje de la excepción puede traer contenido del archivo.
+                log.error("Fallo indexando archivo %s: %s", file.file_id, type(exc).__name__)
 
         # Archivos borrados/movidos fuera del folder en Drive -> limpiar de Qdrant
         removed_ids = set(manifest.keys()) - seen_ids
         for file_id in removed_ids:
             self._delete_file_chunks(file_id)
-            log.info("Eliminado de Qdrant (ya no está en Drive): %s", manifest[file_id]["name"])
+            log.info("Eliminado de Qdrant (ya no está en Drive): archivo %s", file_id)
             del manifest[file_id]
 
         _save_manifest(manifest)

@@ -51,6 +51,12 @@ describe("queryErrorMessage", () => {
     assert.match(queryErrorMessage(null), /conectar/);
   });
 
+  it("429 avisa del límite y dice cuánto esperar", () => {
+    assert.match(queryErrorMessage({ status: 429, retryAfter: 30 }), /muchas consultas/);
+    assert.match(queryErrorMessage({ status: 429, retryAfter: 30 }), /menos de un minuto/);
+    assert.match(queryErrorMessage({ status: 429 }), /unos minutos/);
+  });
+
   it("403 y 422 tienen mensajes propios", () => {
     assert.match(queryErrorMessage({ status: 403 }), /rol/);
     assert.match(queryErrorMessage({ status: 422 }), /2000/);

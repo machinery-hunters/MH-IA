@@ -94,3 +94,51 @@ const ROLE_LABELS: Record<string, string> = {
 export function roleLabel(role: string): string {
   return ROLE_LABELS[role] ?? role;
 }
+
+/** Mismos límites que la política del servidor (la API valida siempre). */
+export const MIN_PASSWORD_LENGTH = 12;
+export const MAX_PASSWORD_LENGTH = 256;
+
+export interface PasswordChangeInput {
+  current: string;
+  next: string;
+  confirm: string;
+}
+
+/**
+ * Revisión previa al envío del cambio de contraseña. `null` = se puede enviar.
+ * Solo evita viajes inútiles: la política completa (repetitiva, común, contiene el
+ * usuario) la aplica el servidor y su mensaje se muestra tal cual.
+ */
+export function passwordChangeProblem({ current, next, confirm }: PasswordChangeInput): string | null {
+  if (current === "") return "Escribe tu contraseña actual.";
+  if (next.length < MIN_PASSWORD_LENGTH) {
+    return `La contraseña nueva debe tener al menos ${MIN_PASSWORD_LENGTH} caracteres.`;
+  }
+  if (next.length > MAX_PASSWORD_LENGTH) {
+    return `La contraseña nueva no puede pasar de ${MAX_PASSWORD_LENGTH} caracteres.`;
+  }
+  if (next !== confirm) return "La confirmación no coincide con la contraseña nueva.";
+  if (next === current) return "La contraseña nueva debe ser distinta.";
+  return null;
+}
+
+/** Mensaje ante un fallo del cambio de contraseña. `null` = no hubo respuesta (red). */
+export function passwordChangeErrorMessage(failure: LoginFailure | null): string {
+  if (failure === null) {
+    return "No se pudo conectar con el servidor. Revisa tu conexión e intenta de nuevo.";
+  }
+  switch (failure.status) {
+    case 400:
+      return "La contraseña actual no es correcta.";
+    case 422:
+      // Texto fijo de la política del servidor (p. ej. "demasiado común").
+      return failure.detail ?? "La contraseña nueva no cumple la política.";
+    case 429:
+      return `Demasiados intentos. Vuelve a intentarlo en ${formatWait(failure.retryAfter)}.`;
+    case 503:
+      return "El servicio de autenticación no está disponible. Intenta de nuevo en un momento.";
+    default:
+      return "No se pudo cambiar la contraseña. Intenta de nuevo.";
+  }
+}

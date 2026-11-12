@@ -141,3 +141,24 @@ def test_unchanged_files_are_skipped(make_indexer):
     again.sync(folder_id="root")
 
     assert again.qdrant.upserts == []
+
+
+def test_sync_logs_never_name_documents_or_subfolders(make_indexer, caplog):
+    def named(folder, file_id, name, modified="2026-10-01"):
+        f = _file(folder, file_id=file_id, modified=modified)
+        return DriveFile(**{**f.__dict__, "name": name})
+
+    files = [
+        named(["Proyectos", "Expedientes", "Juan Pérez"], "f1", "Nómina Juan Pérez.txt"),
+        named(["Sin mapa", "Despidos 2026"], "f2", "Liquidación Ana.txt"),
+    ]
+    indexer = make_indexer(files)
+    with caplog.at_level(logging.INFO):
+        indexer.sync(folder_id="root")
+        indexer.drive.files = []  # borrados en Drive
+        indexer.sync(folder_id="root")
+
+    assert "Indexado: archivo f1" in caplog.text and "archivo f1" in caplog.text
+    assert "Sin mapa" in caplog.text  # la carpeta de primer nivel sí: hay que mapearla
+    for secret in ("Juan", "Nómina", "Liquidación", "Despidos", "Expedientes"):
+        assert secret not in caplog.text

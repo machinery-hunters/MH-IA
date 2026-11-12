@@ -6,6 +6,8 @@ import {
   isValidTotpCode,
   loginErrorMessage,
   normalizeTotpCode,
+  passwordChangeErrorMessage,
+  passwordChangeProblem,
   roleLabel,
   safeNext,
 } from "./auth-helpers.ts";
@@ -127,5 +129,42 @@ describe("roleLabel", () => {
     assert.equal(roleLabel("control_total"), "Control total");
     assert.equal(roleLabel("lider"), "Líder");
     assert.equal(roleLabel("otro"), "otro");
+  });
+});
+
+describe("passwordChangeProblem", () => {
+  const ok = { current: "vieja-clave-1", next: "una frase bastante larga", confirm: "una frase bastante larga" };
+
+  it("deja pasar un cambio válido", () => {
+    assert.equal(passwordChangeProblem(ok), null);
+  });
+
+  it("pide la actual, el largo mínimo, la confirmación y que sea distinta", () => {
+    assert.match(passwordChangeProblem({ ...ok, current: "" }) ?? "", /actual/);
+    assert.match(passwordChangeProblem({ ...ok, next: "corta", confirm: "corta" }) ?? "", /12/);
+    assert.match(passwordChangeProblem({ ...ok, confirm: "otra cosa distinta" }) ?? "", /confirmación/);
+    assert.match(
+      passwordChangeProblem({ current: ok.next, next: ok.next, confirm: ok.next }) ?? "",
+      /distinta/,
+    );
+    const huge = "a".repeat(257);
+    assert.match(passwordChangeProblem({ ...ok, next: huge, confirm: huge }) ?? "", /256/);
+  });
+});
+
+describe("passwordChangeErrorMessage", () => {
+  it("distingue la contraseña actual incorrecta de la política", () => {
+    assert.match(passwordChangeErrorMessage({ status: 400 }), /actual no es correcta/);
+    assert.equal(
+      passwordChangeErrorMessage({ status: 422, detail: "La contraseña es demasiado común." }),
+      "La contraseña es demasiado común.",
+    );
+    assert.match(passwordChangeErrorMessage({ status: 422 }), /política/);
+  });
+
+  it("429 dice cuánto esperar y sin red habla de la conexión", () => {
+    assert.match(passwordChangeErrorMessage({ status: 429, retryAfter: 600 }), /10 minutos/);
+    assert.match(passwordChangeErrorMessage(null), /conectar/);
+    assert.match(passwordChangeErrorMessage({ status: 503 }), /no está disponible/);
   });
 });

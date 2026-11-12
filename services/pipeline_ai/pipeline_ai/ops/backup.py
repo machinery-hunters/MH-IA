@@ -151,16 +151,26 @@ def _load_auth_export(path: Path) -> dict:
     return data
 
 
-def _check_auth_export(path: Path, expected: dict | None) -> dict[str, int]:
-    """Carga el export en una base SQLite desechable: prueba que se puede restaurar."""
+def _check_auth_export(
+    path: Path, expected: dict | None, expected_head: dict | None = None
+) -> dict[str, int]:
+    """Carga el export en una base SQLite desechable: prueba que se puede restaurar (la
+    importación también recalcula la cadena del registro de auditoría)."""
     data = _load_auth_export(path)
+    if expected_head is not None and data.get("audit_head") != expected_head:
+        raise BackupError(
+            f"{path.name}: el registro de auditoría no termina donde dice el manifest"
+        )
     with tempfile.TemporaryDirectory() as tmp:
         try:
             counts = SqliteAuthStore(Path(tmp) / "check.db").import_data(data, replace=False)
         except ImportDataError as exc:
             raise BackupError(f"{path.name}: {exc}") from exc
-    if expected is not None and counts != expected:
-        raise BackupError(f"{path.name}: conteos {counts}, el manifest dice {expected}")
+    if expected is not None:
+        # Respaldos anteriores al registro encadenado contaban la tabla `admin_audit`.
+        expected = {("audit_log" if k == "admin_audit" else k): v for k, v in expected.items()}
+        if counts != expected:
+            raise BackupError(f"{path.name}: conteos {counts}, el manifest dice {expected}")
     return counts
 
 
@@ -263,7 +273,10 @@ def create_backup(
             )
             manifest["auth"] = {
                 "backend": store.backend,
-                "counts": {t: len(data[t]) for t in ("users", "memberships", "admin_audit")},
+                "counts": {t: len(data[t]) for t in ("users", "memberships", "audit_log")},
+                # Última fila del registro encadenado: si alguien rehace la cadena en la base,
+                # deja de coincidir con la de los respaldos.
+                "audit_head": data["audit_head"],
             }
         elif paths.auth_db.exists():
             _sqlite_backup(paths.auth_db, staging / AUTH_DB_NAME)
@@ -341,7 +354,8 @@ def verify_backup(backup_dir: Path) -> list[str]:
     export = backup_dir / AUTH_EXPORT_NAME
     if AUTH_EXPORT_NAME in listed and export.is_file() and not problems:
         try:
-            _check_auth_export(export, (manifest.get("auth") or {}).get("counts"))
+            auth_meta = manifest.get("auth") or {}
+            _check_auth_export(export, auth_meta.get("counts"), auth_meta.get("audit_head"))
         except BackupError as exc:
             problems.append(str(exc))
     return problems

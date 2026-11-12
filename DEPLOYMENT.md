@@ -161,7 +161,32 @@ docker compose run --rm mhia-api python -m pipeline_ai.security.manage audit-log
 ```
 
 Otros comandos: `reset-password`, `set-role`, `disable-user`, `enable-user`,
-`unlock`, `revoke-sessions`.
+`unlock`, `revoke-sessions`. Cada persona puede cambiar su propia contraseña
+desde la GUI (**Mi cuenta**, al hacer clic en su nombre); eso cierra sus
+sesiones en otros equipos. `reset-password` queda para cuando la olvidó.
+
+#### Registro de auditoría
+
+Un solo registro con hash encadenado guarda los cambios de permisos (`admin`),
+los accesos (`acceso`: logins, fallos, bloqueos, salidas, cambios de
+contraseña) y cada consulta (`consulta`: quién, huella de la pregunta,
+resultado, proveedor e identificadores de los fragmentos usados; nunca el texto
+ni el nombre de un documento). Para revisarlo y comprobar que nadie lo alteró:
+
+```bash
+docker compose run --rm mhia-api python -m pipeline_ai.security.manage audit-log --categoria acceso --limit 50
+docker compose run --rm mhia-api python -m pipeline_ai.security.manage audit-verify --respaldo /app/backups
+```
+
+`audit-verify` recalcula toda la cadena y falla si alguna fila se modificó o se
+borró; con `--respaldo` compara además la última fila que guardó el respaldo
+más reciente (detecta que alguien rehízo la cadena o recortó el final).
+Córrelo cada semana y después de cada restauración. Si falla, no restaures
+encima: guarda una copia del volumen de Postgres y avisa a Sistemas.
+
+Cada persona tiene un límite de consultas (`QUERY_RATE_LIMIT` cada
+`QUERY_RATE_WINDOW_S` segundos, 10 por minuto por defecto); al pasarlo, la GUI
+le dice cuánto esperar.
 
 #### Áreas: qué ve cada persona
 
@@ -214,10 +239,11 @@ descifrar): el respaldo automático **no** incluye `.env`.
 
 Corren dentro de `mhia-api`, igual en Windows y en la Mac, y se guardan en
 `./backups/mhia-<fecha>Z/` (fuera de git): `auth.json` (usuarios, áreas y
-registro de cambios; sin sesiones), el manifest de Drive, un snapshot por
-colección de Qdrant y `manifest.json` con el sha256 de cada archivo. La
-verificación carga `auth.json` en una base desechable para probar que se puede
-restaurar.
+registro de auditoría; sin sesiones), el manifest de Drive, un snapshot por
+colección de Qdrant y `manifest.json` con el sha256 de cada archivo y la última
+fila del registro. La verificación carga `auth.json` en una base desechable
+para probar que se puede restaurar y recalcula la cadena del registro: un
+respaldo alterado se rechaza.
 
 | Tarea | Windows | Mac |
 |---|---|---|
@@ -294,6 +320,7 @@ tailscale serve --bg 3000
 **Verificación**
 - [ ] `mhia ps` con todo `healthy` y `mhia doctor` en verde (incluye mhia-api -> Ollama).
 - [ ] `mhia backup` y `mhia restore-drill` correctos.
+- [ ] `audit-verify --respaldo /app/backups` dice "Registro íntegro" y "Coincide".
 - [ ] `curl http://127.0.0.1:8000/health` responde `ok`.
 - [ ] Ningún puerto publicado fuera de `127.0.0.1` (`docker ps`).
 - [ ] `docker exec -it mhia-api python -m eval.eval_router` iguala el resultado de la laptop.
