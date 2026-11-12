@@ -1,6 +1,10 @@
 # Plan maestro — MH IA, el cerebro de Machinery Hunters
 
 **Fecha:** 6 de noviembre de 2026 (rev. 2, con respuestas de Fernando) · **Base revisada:** `develop` en `4e1f9f4` (PR #13)
+**Rev. 3 (12 de noviembre de 2026):** estado de los bloques 1–5 (§7.0) y nueva
+fase **F1b — Administración dentro de la plataforma y dirección visual** (§2.8, §7),
+pedida por Fernando: personas, integraciones, uso y costo, y salud del sistema se
+operan desde la GUI, solo por el líder técnico.
 **Alcance:** revisión del estado actual, arquitectura objetivo, hardware, acceso
 remoto, clientes de escritorio y móvil, seguridad y roadmap por fases.
 
@@ -49,6 +53,10 @@ su estado y se mueven sus decisiones a esos documentos.
    ve todo a nivel confidencial, y Sistemas administra sin leer datos. Ver 2.5.1.
 10. **Desarrollo sin costo recurrente hasta aprobar presupuesto:** modelo local por
     defecto y un crédito de Claude de US$5–10 solo para validar (sección 8.1).
+12. **Administración dentro de la plataforma (rev. 3):** el día a día ya no
+    depende de la CLI. Una consola solo para el líder técnico (`control_total`)
+    da de alta personas e integraciones, muestra uso y costo (tokens por persona,
+    día y modelo, con tope mensual) y la salud del sistema. Ver 2.8 y F1b.
 11. **Presupuesto estimado:** US$310–515 de pago único y US$153–380 al mes en
     operación con 12 personas; en desarrollo, US$21–64 al mes. Ver sección 8.
 
@@ -281,7 +289,7 @@ cualquier sistema nuevo.
   dueño sin área asignada **no se indexa** (mismo criterio de fallo cerrado que
   las carpetas desconocidas).
 - **Dónde vive:** la tabla de usuarios y áreas pasa a Postgres, administrable
-  desde la GUI por `configuracion`, con auditoría de cada cambio.
+  desde la GUI por `control_total` (2.8), con auditoría de cada cambio.
 
 #### 2.5.1 Áreas y roles iniciales (a partir del Excel del 6 de noviembre)
 
@@ -320,8 +328,8 @@ ver lo de las demás.
 | `consulta` | Consultar en sus áreas |
 | `lider` | Consultar en sus áreas, ver el estado de sus fuentes |
 | `direccion` (nuevo) | Consultar en todas las áreas a nivel CONFIDENTIAL; RESTRICTED solo donde se le asigne |
-| `configuracion` | Administrar usuarios, áreas y conectores (sin ver valores de secretos); no da acceso a datos por sí mismo |
-| `control_total` | Infraestructura y secretos; **no da acceso a datos por sí mismo** |
+| `configuracion` | *Se retira en rev. 3 (decisión 9.2 #6)*: lo absorbe `control_total` |
+| `control_total` | Infraestructura, secretos, personas, áreas e integraciones desde la consola (2.8); **no da acceso a datos por sí mismo** |
 
 **Asignación propuesta por puesto** (nivel máximo por área; `general` en todos):
 
@@ -390,9 +398,42 @@ la consola de Anthropic.
 | Almacén | Contenido | Decisión |
 |---|---|---|
 | Qdrant | Fragmentos de Drive (vector denso + BM25) con payload `domain`, `sensitivity`, `allowed_areas`, `allowed_roles`, `owner_email` | Una colección por tipo de contenido; índices de payload en los campos de filtro |
-| Postgres (nuevo) | Usuarios, áreas, mapeo correo → área, configuración de conectores (sin secretos), auditoría | Entra en la fase 1. Auditoría en tabla solo de inserción, con un hash encadenado por fila para detectar alteraciones |
+| Postgres (nuevo) | Usuarios, áreas, mapeo correo → área, configuración de conectores (credenciales cifradas con `INTEGRATIONS_KEY`, ver 2.8), uso y costo por consulta, auditoría | Entra en la fase 1. Auditoría en tabla solo de inserción, con un hash encadenado por fila para detectar alteraciones |
 | SQLite (`auth.db`) | Usuarios y sesiones | **Hecho (9 nov 2026, bloque 2b):** usuarios, áreas, sesiones y registro de cambios de permisos en Postgres; el `auth.db` se migra solo al primer arranque. SQLite queda solo para pruebas y desarrollo sin Docker. Hash encadenado del registro y eventos de login y de consulta: **hechos** (12 nov 2026, bloque 4). Pendiente: configuración de conectores |
 | Secretos | `.env` del host + `credentials/` | Fuera de git, fuera del backup común; respaldo en gestor de contraseñas |
+
+### 2.8 Administración dentro de la plataforma (rev. 3, 12 nov 2026)
+
+**Por qué:** con 12 personas y conectores nuevos, administrar por CLI dentro del
+contenedor no escala y deja todo en manos de quien sabe usar la terminal. La
+operación diaria se hace desde la GUI; la CLI queda como respaldo para
+emergencias (base caída, recuperar el acceso del propio administrador).
+
+**Quién:** solo el **líder técnico**, con rol `control_total`, segundo factor y
+sesión reciente. Nadie más ve la consola, y la API valida cada acción aunque la
+pantalla esté oculta. Las acciones sensibles (quitar un segundo factor, cambiar
+el área de alguien a RESTRICTED, guardar una credencial) piden **confirmar con un
+código TOTP nuevo**. Todo cambio va al registro encadenado con el antes y el
+después, igual que hoy desde la CLI.
+
+**Secciones de la consola** (`/sistema`, hoy reservada y vacía):
+
+| Sección | Qué permite | Notas de seguridad |
+|---|---|---|
+| **Personas y áreas** | Alta y baja de personas, rol, áreas con su nivel, presets por puesto, importar la lista de Sistemas, restablecer contraseña (contraseña temporal de un solo uso que la persona cambia al entrar), abrir la ventana del segundo factor, `reset-totp`, cerrar sesiones, desbloquear | Misma lógica y mismas validaciones que la CLI (una sola implementación). El administrador no puede quitarse a sí mismo `control_total` ni dejar el sistema sin ningún `control_total` activo |
+| **Integraciones** | Alta y edición de conectores (Drive, GoHighLevel, Websourcing, ERPNext): credenciales, carpeta o base, área por defecto, lista blanca de campos, activar o pausar, **probar conexión** y ver la última sincronización | Credenciales cifradas en Postgres con una clave propia (`INTEGRATIONS_KEY`, en `.env`, distinta de `API_TOTP_KEY`); **de solo escritura**: después de guardarlas solo se ve "configurada" y los últimos 4 caracteres. El catálogo de tipos de conector vive en el código: desde la GUI se configura un tipo existente, no se sube código. Los conectores siguen corriendo en la Mac y nada cambia en la pasarela hacia Claude |
+| **Uso y costo** | Consultas por persona, área y día; tokens de entrada y salida y costo estimado por modelo (Claude y local); tope de gasto mensual y avisos al 50, 80 y 100 % | Al llegar al tope, el sistema **pasa solo a modo local** (no se corta el servicio) y avisa. Solo cifras: nunca el texto de las consultas. Los tokens salen de la respuesta de la API de Anthropic y se guardan en el mismo registro de cada consulta |
+| **Salud** | Estado de API, Ollama, Qdrant, Postgres y conectores; disco, último respaldo y su verificación, integridad del registro (`audit-verify`), errores recientes y versión desplegada | Lee lo mismo que el script de alertas de §3.6, así la pantalla y la alerta no se contradicen. Sin detalles internos fuera de la consola |
+| **Registro** | Consulta del registro encadenado con filtros (categoría, persona, fecha) y exportación | Solo lectura; exportar queda a su vez registrado |
+
+**Roles:** la tabla de 2.5.1 preveía un rol `configuracion` para administrar
+usuarios y conectores, pero ningún puesto lo tiene asignado. Con la petición de
+Fernando (solo el líder técnico agrega personas e integraciones) se retira y sus
+permisos quedan solo en `control_total` (decisión 9.2 #6). `control_total` sigue
+sin ver datos por su rol: administrar no da acceso a documentos.
+
+**Qué no entra:** editar documentos, ver el contenido de las consultas de otras
+personas o leer datos de un área sin el permiso temporal auditado de 2.5.
 
 ---
 
@@ -504,6 +545,8 @@ correr la prueba de humo.
   Ollama, Qdrant, Postgres, espacio en disco y la edad del último backup.
   Alerta por correo o al celular de Fernando (por ejemplo con ntfy alojado en
   la propia Mac, accesible solo por el tailnet).
+- **Pantalla de salud:** la consola de administración (2.8) muestra el mismo
+  estado que revisa el script, más el uso y costo del mes.
 - **Métricas:** Qdrant ya expone `/metrics`. Prometheus y Grafana quedan para
   cuando haya más de 10 usuarios activos; antes, el script y los logs bastan.
 - **Logs:** JSON estructurado, rotación diaria, 30 días, sin contenido de
@@ -640,8 +683,8 @@ pantallas de administración de usuarios y áreas, y CSP con nonce.
   - TOTP obligatorio para `control_total` y para quien tenga un área en
     CONFIDENTIAL o más (**hecho**, 12 nov 2026, bloque 5; `MFA_REQUIRED_LEVEL`).
   - Passkeys como factor preferido (fase 5).
-  - Sin registro público: altas solo por `configuracion` o `control_total`, con
-    auditoría.
+  - Sin registro público: altas solo por `control_total` (consola 2.8 o CLI),
+    con auditoría.
 - **Autorización (RBAC + áreas):** se mantienen los 4 roles y sus permisos, y se
   agrega la dimensión de área de la sección 2.5. Cada endpoint usa
   `require_permission`; cada fuente aplica el filtro del principal. La GUI solo
@@ -667,8 +710,9 @@ alteraciones. Exportación mensual al backup. Acceso de lectura solo para
 > bloqueos, salidas y cambios de contraseña van al mismo registro. Los respaldos
 > llevan la cabeza de la cadena y `manage audit-verify --respaldo` detecta una
 > cadena rehecha o recortada. Hoy se consulta solo por CLI (`audit-log`, servidor);
-> la pantalla para `control_total`, la retención y anclar la cabeza fuera del
-> equipo siguen pendientes (SECURITY.md §3.5).
+> la pantalla para `control_total` llega con la consola de administración
+> (2.8, bloque 9); la retención y anclar la cabeza fuera del equipo siguen
+> pendientes (SECURITY.md §3.5).
 
 ### 6.5 Gestión de secretos
 
@@ -700,6 +744,40 @@ Fechas estimadas para una persona con dedicación principal a MH IA a partir del
 1 de diciembre. Cada fase cierra con sus criterios de aceptación; no se empieza
 la siguiente sin cumplirlos, salvo las marcadas como paralelas.
 
+### 7.0 Estado al 12 de noviembre de 2026
+
+Cada bloque es una rama y un PR a `develop`, con pruebas, lint y revisión de
+secretos en verde.
+
+| Bloque | Qué quedó | PR | Probado en Windows |
+|---|---|---|---|
+| 1 | Ingesta de Drive con cuenta de servicio y área por carpeta; lo que no tiene área no se indexa | #15, #16 | Sí: 2 de 41 archivos indexados, los 39 de "Sistemas" quedan fuera a propósito |
+| 2 | Modelo rol × área × nivel en Postgres; filtro en API y retriever; usuarios con áreas por CLI e importación desde el Excel | #17 | Sí |
+| 3 | Rate limit por persona, cambio de contraseña y bloqueo por intentos | #18 | Sí |
+| 4 | Registro de auditoría encadenado (admin, acceso, consulta) y verificación contra respaldos | #19 | Sí |
+| 5 | Segundo factor obligatorio para áreas CONFIDENTIAL o más, activación desde la GUI con QR, sesiones propias y cerrar las demás | #20 | Sí: activación, sesiones, filtro por área y respuesta local con fuente citada |
+
+**Cambio de rumbo (rev. 3):** Fernando pidió que la administración diaria no
+dependa de la CLI, que solo el líder técnico agregue personas e integraciones, y
+ver uso, tokens y salud del sistema. Eso es la nueva fase **F1b** (2.8) y entra
+antes de los conectores nuevos de F3, porque Integraciones es la puerta de
+entrada de GoHighLevel y Websourcing. La pasada visual se adelanta al bloque 7
+para que las pantallas nuevas nazcan ya con la dirección visual elegida.
+
+### 7.1 Plan de trabajo por bloques
+
+| Bloque | Fase | Contenido | Fechas estimadas |
+|---|---|---|---|
+| 6 | F1 | Escaneo en CI: `pip-audit`, `npm audit` y Trivy sobre las imágenes; Dependabot | 13 al 16 de noviembre |
+| 7 | F1 | **Pasada visual**: tokens de color y tipografía de la dirección elegida (`docs/GUI_DIRECCION_VISUAL.md`), login, consultar y cuenta; sin tocar seguridad | 17 al 24 de noviembre |
+| 8 | F1 | Área por correo del dueño en Drive y `allowed_roles` por documento; pruebas de mutación del filtro | 24 de noviembre al 4 de diciembre |
+| 9 | F1b | Consola `/sistema`: **Personas y áreas** (alta, baja, rol, áreas, segundo factor, sesiones, desbloqueo) y **Registro** con filtros | 7 al 16 de diciembre |
+| 10 | F1b | **Uso y costo**: tokens y costo por consulta, persona, área, día y modelo; tope mensual con paso automático a modo local | 14 al 23 de diciembre |
+| 11 | F1b | **Salud**: pantalla de estado y el script de alertas de §3.6 leyendo la misma revisión | 4 al 8 de enero |
+| 12 | F1b | **Integraciones**: alta de conectores desde la GUI, credenciales cifradas de solo escritura, probar conexión; Drive migra a esta configuración | 4 al 8 de enero (en paralelo con el 11) |
+
+En paralelo, Fernando lleva F0 (Mac mini) y las decisiones de 9.2.
+
 ```mermaid
 gantt
   title MH IA - roadmap
@@ -708,13 +786,14 @@ gantt
   section Preparacion
   F0 Mac mini y base operativa      :f0, 2026-11-09, 2026-11-27
   section Desarrollo
-  F1 Acceso por area y endurecimiento :f1, 2026-12-01, 2026-12-19
-  F2 Multi-agente y calidad local     :f2, 2027-01-04, 2027-01-22
-  F3 Websourcing y CRM                :f3, 2027-01-25, 2027-02-12
-  F4 Reportes                         :f4, 2027-02-15, 2027-02-26
-  F5 GUI real y passkeys              :f5, 2027-01-04, 2027-02-26
-  F6 Produccion y piloto              :f6, 2027-03-01, 2027-03-12
-  F7 ERP y acciones                   :f7, 2027-03-15, 2027-04-09
+  F1 Acceso por area (bloques 1-8)    :f1, 2026-11-05, 2026-12-04
+  F1b Administracion (bloques 9-12)   :f1b, 2026-12-07, 2027-01-08
+  F2 Multi-agente y calidad local     :f2, 2027-01-11, 2027-01-29
+  F3 Websourcing y CRM                :f3, 2027-02-01, 2027-02-19
+  F4 Reportes                         :f4, 2027-02-22, 2027-03-05
+  F5 GUI real y passkeys              :f5, 2027-01-11, 2027-03-05
+  F6 Produccion y piloto              :f6, 2027-03-08, 2027-03-19
+  F7 ERP y acciones                   :f7, 2027-03-22, 2027-04-16
 ```
 
 ### F0 — Mac mini y base operativa (9 al 27 de noviembre, trabajo ligero)
@@ -735,18 +814,21 @@ No compite con Minutas IA: es configuración, no lógica de negocio.
 servicios suben solos, la laptop llega por el tailnet a la GUI, el laboratorio
 da 14/14 sin fugas y un backup se restaura en la laptop.
 
-### F1 — Acceso por área y endurecimiento (1 al 19 de diciembre)
+### F1 — Acceso por área y endurecimiento (adelantada: 5 de noviembre al 4 de diciembre)
+
+Bloques 1 a 5 hechos (7.0); faltan los bloques 6 a 8 (7.1).
 
 - Modelo rol × área × documento (sección 2.5) en API, ingesta y retriever.
 - Postgres para usuarios, áreas, configuración y auditoría; migración desde
   SQLite.
-- Ingesta de Drive con área por correo del dueño; archivos sin área no se
-  indexan.
-- `allowed_roles` por documento.
+- Ingesta de Drive con área por carpeta (**hecho**, bloque 1) y por correo del
+  dueño; archivos sin área no se indexan.
+- `allowed_roles` por documento (bloque 8).
 - Auditoría con hash encadenado; logs sin nombres de documentos.
 - Rate limit por usuario; cambio de contraseña; TOTP para roles con datos
-  confidenciales (**hechos**, bloques 4 y 5).
-- Lockfiles, imágenes por digest, Dependabot y Trivy en CI.
+  confidenciales (**hechos**, bloques 3 y 5).
+- Lockfiles, imágenes por digest, Dependabot y Trivy en CI (bloque 6).
+- Pasada visual con la dirección elegida (bloque 7).
 - Ollama nativo también en la laptop (paridad).
 
 **Aceptación:** pruebas automáticas que demuestran que un líder de Ventas no ve
@@ -754,7 +836,21 @@ Administración y viceversa (también con servicios reales); mutaciones del
 filtro detectadas; auditoría registra fuentes vistas; CI verde con escaneo de
 dependencias e imágenes.
 
-### F2 — Multi-agente y calidad local (4 al 22 de enero)
+### F1b — Administración dentro de la plataforma (7 de diciembre al 8 de enero)
+
+Bloques 9 a 12 (7.1), con el diseño de 2.8. La CLI sigue existiendo y comparte
+la misma lógica, de modo que una regla nunca queda distinta según por dónde se
+administre.
+
+**Aceptación:** el líder técnico da de alta a una persona nueva con sus áreas,
+le abre el segundo factor y la persona entra, todo sin abrir una terminal; nadie
+con otro rol llega a la consola ni a su API (prueba automática por cada
+endpoint); una credencial guardada nunca vuelve a mostrarse completa ni aparece
+en logs o respaldos sin cifrar; la pantalla de uso cuadra con la factura de
+Anthropic del mes (±5 %) y al pasar el tope el sistema responde en modo local;
+la pantalla de salud y la alerta marcan lo mismo al detener Qdrant.
+
+### F2 — Multi-agente y calidad local (11 al 29 de enero)
 
 - Cablear el supervisor en `graph.py` con `Send`; Drive como primer sub-agente.
 - Claude recibe la lista de fuentes no disponibles.
@@ -769,8 +865,9 @@ Claude con citas; con una fuente caída responde con las demás y lo declara;
 0 fugas de canarios en el laboratorio y en la prueba adversarial; recall y
 precisión medidos con datos reales y registrados en este documento.
 
-### F3 — Websourcing y CRM (25 de enero al 12 de febrero)
+### F3 — Websourcing y CRM (1 al 19 de febrero)
 
+- Ambos conectores se dan de alta desde Integraciones (bloque 12).
 - Conector de Websourcing/SourcingBot (Firestore/Supabase), solo lectura, con
   lista blanca de campos y área por registro.
 - Conector de GoHighLevel con token de integración privada de solo lectura,
@@ -781,26 +878,28 @@ precisión medidos con datos reales y registrados en este documento.
 si una fuente cae, las demás responden; ningún dato de contacto llega a Claude
 (prueba automática).
 
-### F4 — Reportes (15 al 26 de febrero)
+### F4 — Reportes (22 de febrero al 5 de marzo)
 
 - Reportes con plantilla: Claude redacta y entrega la especificación de
   gráficas; la Mac dibuja y arma el PDF con los datos reales.
-- Selección de modelo de Claude por tipo de tarea y tope de gasto.
+- Selección de modelo de Claude por tipo de tarea (el tope de gasto ya existe
+  desde el bloque 10).
 
 **Aceptación:** un reporte semanal de ventas o sourcing se genera de punta a
 punta sin que los números reales salgan de la Mac (verificado en la auditoría).
 
-### F5 — GUI real y passkeys (en paralelo, 4 de enero al 26 de febrero)
+### F5 — GUI real y passkeys (en paralelo, 11 de enero al 5 de marzo)
 
-- Dirección visual propia, pantallas de consulta con estado por fuente,
-  administración de usuarios y áreas, sesiones activas.
+- Pantallas de consulta con estado por fuente e historial propio. La dirección
+  visual (bloque 7), la administración (F1b) y las sesiones activas (bloque 5)
+  ya no son parte de esta fase.
 - Markdown seguro, CSP con nonce.
 - Passkeys para todos los roles, TOTP como respaldo.
 
 **Aceptación:** pruebas de accesibilidad básicas, CSP sin `unsafe-inline`,
 passkey funcionando en un iPhone y un Android dentro del tailnet.
 
-### F6 — Producción y piloto (1 al 12 de marzo)
+### F6 — Producción y piloto (8 al 19 de marzo)
 
 - Reindexar en la Mac, `MHIA_ENV=production`, Tailscale con grants por grupo.
 - Runbooks completos y simulacro de restauración.
@@ -809,9 +908,10 @@ passkey funcionando en un iPhone y un Android dentro del tailnet.
 **Aceptación:** piloto sin incidentes de acceso indebido, p95 de consulta menor
 a 10 s, backups y alertas funcionando, retroalimentación registrada.
 
-### F7 — ERP y acciones (15 de marzo en adelante, según el proveedor)
+### F7 — ERP y acciones (22 de marzo en adelante, según el proveedor)
 
-- Conector ERPNext de solo lectura con DocTypes en lista blanca.
+- Conector ERPNext de solo lectura con DocTypes en lista blanca, dado de alta
+  desde Integraciones.
 - Primeras acciones de escritura (por ejemplo crear una tarea o nota en el
   CRM) con confirmación humana explícita y auditoría.
 
@@ -821,12 +921,13 @@ confirmó; ninguna acción se ejecuta sin confirmación.
 ### Dependencias
 
 ```
-F0 ──► F1 ──► F2 ──► F3 ──► F4 ──► F6 ──► F7
-              └──── F5 (en paralelo desde enero) ────┘
+F0 ──► F1 ──► F1b ──► F2 ──► F3 ──► F4 ──► F6 ──► F7
+                       └──── F5 (en paralelo desde enero) ────┘
 ```
 
 F1 va antes que cualquier conector nuevo porque define cómo se filtra cada
-recurso. F7 (ERP) no bloquea nada y puede adelantarse si el proveedor entrega
+recurso, y F1b porque los conectores nuevos se dan de alta desde Integraciones
+y su gasto se mide en Uso y costo. F7 (ERP) no bloquea nada y puede adelantarse si el proveedor entrega
 antes, siempre después de F1.
 
 ---
@@ -944,6 +1045,9 @@ solo lee el payload de la pasarela) se aplica a ambos.
 | 2 | Presupuesto mensual y tope de gasto (sección 8) | Dirección | Plan de Tailscale y límite de Anthropic antes del piloto (F6) | **Modo sin costo** de la sección 8.1 durante F0–F5: modelo local, Tailscale gratuito y como máximo un crédito de Claude de US$5–10 |
 | 3 | ¿Se permite un proveedor externo para imágenes con contenido público? | Fernando y Dirección (en gestión) | Alcance de "creación de imágenes" | Generación local en la Mac; ningún proveedor externo |
 | 4 | Solicitud a Marketing (app de Tailscale, verificación en dos pasos, grupo) | Fernando con Marketing | SSO y MFA del acceso remoto | Tailnet solo con los dispositivos de Fernando |
+| 5 | Dirección visual: A "Ficha de equipo", B o C (`docs/GUI_DIRECCION_VISUAL.md`) | Fernando | La pasada visual del bloque 7 y todas las pantallas de F1b | **A "Ficha de equipo"** |
+| 6 | Retirar el rol `configuracion`, de modo que solo `control_total` agregue personas e integraciones | Fernando | Quién puede tocar credenciales y accesos (2.8) | Se retira; nadie lo tiene asignado hoy |
+| 7 | Tope de gasto mensual en Claude y a quién avisar | Fernando y Dirección | El bloque 10 corta el gasto en el tope y pasa a modo local | US$10 al mes, aviso por ntfy a Fernando |
 
 ---
 
