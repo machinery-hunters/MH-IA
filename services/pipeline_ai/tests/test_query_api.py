@@ -36,6 +36,7 @@ def _answered(**extra):
         "final_answer": ANSWER,
         "aborted": False,
         "retrieval_ok": True,
+        "reasoner": "local",
         "citations": [
             {"source": "Google Drive: Contrato_034.pdf", "chunk_id": "a::0", "score": 0.9},
             {"source": "Google Drive: Contrato_034.pdf", "chunk_id": "a::1", "score": 0.85},
@@ -74,7 +75,47 @@ def test_an_answered_query_returns_the_answer_and_unique_sources(monkeypatch):
         "status": "answered",
         "answer": ANSWER,
         "sources": ["Google Drive: Contrato_034.pdf", "Google Drive: Anexo.pdf"],
+        "reasoner": "local",
     }
+
+
+@pytest.mark.parametrize(
+    ("graph_value", "expected"),
+    [("claude", "claude"), ("local", "local"), (None, None), ("otro", None)],
+)
+def test_the_response_says_which_model_wrote_the_answer(monkeypatch, graph_value, expected):
+    graph = FakeGraph(_answered(reasoner=graph_value))
+
+    body = _post(_client(graph, monkeypatch=monkeypatch)).json()
+
+    assert body["reasoner"] == expected
+
+
+def test_a_blocked_or_unanswered_query_reports_no_reasoner(monkeypatch):
+    graph = FakeGraph(_answered(aborted=True, abort_reason="envio_bloqueado: x"))
+
+    body = _post(_client(graph, monkeypatch=monkeypatch)).json()
+
+    assert body["status"] == "blocked" and body["reasoner"] is None
+
+
+def test_the_api_does_not_start_with_an_unknown_reasoning_mode(monkeypatch):
+    monkeypatch.setattr(query_service.settings, "reasoning_mode", "nube")
+    app = create_app(allowed_hosts=["testserver"])
+
+    with pytest.raises(RuntimeError, match="REASONING_MODE"):
+        with TestClient(app):
+            pass
+
+
+def test_the_api_does_not_start_in_claude_mode_without_an_api_key(monkeypatch):
+    monkeypatch.setattr(query_service.settings, "reasoning_mode", "claude")
+    monkeypatch.setattr(query_service.settings, "anthropic_api_key", "")
+    app = create_app(allowed_hosts=["testserver"])
+
+    with pytest.raises(RuntimeError, match="anthropic_api_key"):
+        with TestClient(app):
+            pass
 
 
 def test_no_evidence_has_no_sources(monkeypatch):
@@ -181,7 +222,7 @@ def test_the_audit_line_says_who_asked_but_never_what(monkeypatch, caplog):
     assert "user_id=u-123" in line and "role=lider" in line
     assert f"session={graph.states[0]['session_id']}" in line
     assert "query_sha256=" in line and f"query_len={len(QUERY)}" in line
-    assert "status=answered" in line and "sources=2" in line
+    assert "status=answered" in line and "sources=2" in line and "reasoner=local" in line
     # (sin "034" suelto: un hash o UUID hexadecimal podría contenerlo por azar)
     for secret in ("Acme", "contrato 034", "1,250,000", "Contrato", ANSWER):
         assert secret not in caplog.text

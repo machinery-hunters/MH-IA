@@ -125,6 +125,25 @@ try {
                 if (-not $pg -or -not $pg.Matches[0].Groups[1].Value) { $problems += "POSTGRES_PASSWORD vacía en .env (ver .env.example)" }
                 elseif ($pg.Matches[0].Groups[1].Value.Length -lt 24) { Write-Warning "POSTGRES_PASSWORD tiene menos de 24 caracteres (producción lo exige)" }
                 else { Write-Host "POSTGRES_PASSWORD definida (OK)" }
+                # Razonamiento: con claude hace falta la clave (nunca se muestra) y cada consulta
+                # gasta crédito. El modelo local que redacta debe estar en ollama-models.txt.
+                $mode = "local"
+                $rmode = Select-String -Path ".env" -Pattern '^REASONING_MODE=(.*)$' | Select-Object -First 1
+                if ($rmode -and $rmode.Matches[0].Groups[1].Value.Trim()) { $mode = $rmode.Matches[0].Groups[1].Value.Trim().ToLower() }
+                if ($mode -notin @("local", "claude")) { $problems += "REASONING_MODE=$mode en .env: debe ser local o claude" }
+                elseif ($mode -eq "claude") {
+                    $key = Select-String -Path ".env" -Pattern '^ANTHROPIC_API_KEY=\S+' | Select-Object -First 1
+                    if (-not $key) { $problems += "REASONING_MODE=claude sin ANTHROPIC_API_KEY en .env" }
+                    else { Write-Warning "REASONING_MODE=claude: cada consulta gasta crédito de la API de Claude" }
+                }
+                else { Write-Host "REASONING_MODE=local (sin costo)" }
+                $reasoner = Select-String -Path ".env" -Pattern '^OLLAMA_REASONER_MODEL=(\S+)' | Select-Object -First 1
+                if ($reasoner) {
+                    $tag = $reasoner.Matches[0].Groups[1].Value
+                    $known = @((Get-ExpectedModels).Models.Keys)
+                    if ($tag -notin $known -and "${tag}:latest" -notin $known) { $problems += "OLLAMA_REASONER_MODEL=$tag no está en scripts/ollama-models.txt" }
+                    else { Write-Host "Modelo de razonamiento $tag (en ollama-models.txt)" }
+                }
             }
             Invoke-Checked { docker compose @Compose config --quiet }
             Write-Host "docker compose config ($OllamaMode): OK"

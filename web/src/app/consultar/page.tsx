@@ -8,6 +8,7 @@ import {
   MAX_QUERY_LENGTH,
   canSubmitQuery,
   queryErrorMessage,
+  reasonerNote,
   statusLabel,
 } from "@/lib/query-helpers";
 
@@ -96,6 +97,9 @@ export default function ConsultarPage() {
           <div className="whitespace-pre-wrap border border-line bg-panel p-4">
             {result.answer}
           </div>
+          {result.status === "answered" && reasonerNote(result.reasoner) && (
+            <p className="text-xs text-muted">{reasonerNote(result.reasoner)}</p>
+          )}
           {result.status === "answered" && result.sources.length > 0 && (
             <div className="flex flex-col gap-1">
               <h3 className="text-sm font-medium">Fuentes consultadas</h3>

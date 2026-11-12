@@ -903,6 +903,15 @@ el presupuesto**. F0 a F5 no.
 proveedor sin tocar el resto del grafo, y la prueba de aislamiento (`claude_node`
 solo lee el payload de la pasarela) se aplica a ambos.
 
+> **Hecho (12 nov 2026, bloque 3):** `REASONING_MODE` (`local` por defecto) en
+> `nodes/reasoner_node.py`; el modelo local es `OLLAMA_REASONER_MODEL` (vacío =
+> `OLLAMA_LLM_MODEL` hasta medir el modelo grande en la Mac). Con `claude`, si la
+> API falla responde el modelo local. Los dos proveedores reciben el mismo payload
+> de la pasarela y las pruebas de privacidad de extremo a extremo corren en ambos
+> modos. La API y la GUI dicen quién redactó; la auditoría registra el proveedor.
+> Pendiente: elegir y medir el modelo grande (sección 3.3) y decidir si responde
+> contenido RESTRICTED (sección 2.6; hoy la pasarela lo sigue bloqueando).
+
 ---
 
 ## 9. Decisiones

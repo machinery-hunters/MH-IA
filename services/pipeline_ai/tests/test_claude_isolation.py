@@ -1,4 +1,5 @@
-"""Claude solo recibe lo que aprobó el outbound gateway, y nada más puede llegar a Claude."""
+"""El razonamiento (Claude o el modelo local) solo recibe lo que aprobó el outbound gateway, y
+nada más puede llegar a Claude."""
 
 import ast
 from pathlib import Path
@@ -7,8 +8,11 @@ from types import SimpleNamespace
 import pytest
 
 import pipeline_ai.nodes.claude_node as claude_mod
+import pipeline_ai.nodes.local_reasoner as local_mod
+from pipeline_ai.config import settings
 from pipeline_ai.graph import mhia_graph
 from pipeline_ai.nodes.outbound_node import sensitivity_for_state
+from pipeline_ai.nodes.reasoner_node import reasoner_node
 from pipeline_ai.privacy.outbound_gateway import prepare_outbound
 from pipeline_ai.privacy.sensitivity import Sensitivity
 
@@ -42,12 +46,23 @@ def _payload():
     )
 
 
-# -- El nodo solo usa el payload -----------------------------------------------------
+# -- El nodo solo usa el payload, con los dos proveedores ----------------------------------
 
 
-async def test_claude_only_receives_the_gateway_payload(monkeypatch):
-    fake = FakeClaude()
-    monkeypatch.setattr(claude_mod, "_get_claude", lambda: fake)
+@pytest.fixture(params=["local", "claude"])
+def provider(request, monkeypatch):
+    """Instala un modelo falso para el proveedor del modo y otro que no debe usarse."""
+    fake, unused = FakeClaude(), FakeClaude()
+    monkeypatch.setattr(settings, "reasoning_mode", request.param)
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-fake-para-pruebas")
+    claude, local = (fake, unused) if request.param == "claude" else (unused, fake)
+    monkeypatch.setattr(claude_mod, "_get_claude", lambda: claude)
+    monkeypatch.setattr(local_mod, "_get_local_reasoner", lambda: local)
+    yield fake
+    assert unused.calls == []
+
+
+async def test_the_reasoner_only_receives_the_gateway_payload(provider):
     payload = _payload()
     state = {
         "query": "SENTINEL_RAW_QUERY Acme",
@@ -58,38 +73,34 @@ async def test_claude_only_receives_the_gateway_payload(monkeypatch):
         "outbound": payload,
     }
 
-    result = await claude_mod.claude_reasoner_node(state)
+    result = await reasoner_node(state)
 
-    assert len(fake.calls) == 1
-    sent = "\n".join(text for _role, text in fake.calls[0])
+    assert len(provider.calls) == 1
+    sent = "\n".join(text for _role, text in provider.calls[0])
     assert payload.query in sent and payload.context in sent
     assert "SENTINEL" not in sent
     assert "Contrato_Consignacion" not in sent
     assert result["aborted"] is False
+    assert result["reasoner"] == settings.reasoning_mode
     # La respuesta se re-etiqueta en local con los nombres reales.
     assert REAL_1 in result["final_answer"]
 
 
-async def test_claude_is_not_called_without_a_gateway_payload(monkeypatch):
-    fake = FakeClaude()
-    monkeypatch.setattr(claude_mod, "_get_claude", lambda: fake)
+async def test_no_model_is_called_without_a_gateway_payload(provider):
+    missing = await reasoner_node({"query": "x"})
+    forged = await reasoner_node({"query": "x", "outbound": {"query": "y", "context": "z"}})
 
-    missing = await claude_mod.claude_reasoner_node({"query": "x"})
-    forged = await claude_mod.claude_reasoner_node(
-        {"query": "x", "outbound": {"query": "y", "context": "z"}}
-    )
-
-    assert fake.calls == []
+    assert provider.calls == []
     assert missing["aborted"] is True and forged["aborted"] is True
 
 
-async def test_response_given_as_content_blocks_is_joined_and_relabeled(monkeypatch):
-    fake = FakeClaude(
-        reply=[{"type": "text", "text": "Hola "}, {"type": "text", "text": "[Fuente: Fuente_2]"}]
-    )
-    monkeypatch.setattr(claude_mod, "_get_claude", lambda: fake)
+async def test_response_given_as_content_blocks_is_joined_and_relabeled(provider):
+    provider.reply = [
+        {"type": "text", "text": "Hola "},
+        {"type": "text", "text": "[Fuente: Fuente_2]"},
+    ]
 
-    result = await claude_mod.claude_reasoner_node({"outbound": _payload()})
+    result = await reasoner_node({"outbound": _payload()})
 
     assert result["final_answer"] == f"Hola [Fuente: {REAL_2}]"
 
@@ -127,9 +138,9 @@ def test_no_other_module_builds_an_anthropic_client_dynamically():
     assert offenders == []
 
 
-def test_the_only_edge_into_claude_comes_from_the_outbound_gateway():
+def test_the_only_edge_into_the_reasoner_comes_from_the_outbound_gateway():
     edges = mhia_graph.get_graph().edges
-    assert {e.source for e in edges if e.target == "claude_reasoner"} == {"outbound_gateway"}
+    assert {e.source for e in edges if e.target == "reasoner"} == {"outbound_gateway"}
 
 
 def test_the_gateway_is_only_reached_from_the_anonymizer():
@@ -137,12 +148,38 @@ def test_the_gateway_is_only_reached_from_the_anonymizer():
     assert {e.source for e in edges if e.target == "outbound_gateway"} == {"anonymizer"}
 
 
-def test_a_blocked_gateway_ends_the_flow_instead_of_reaching_claude():
+def test_a_blocked_gateway_ends_the_flow_instead_of_reaching_the_reasoner():
     edges = mhia_graph.get_graph().edges
     assert {e.target for e in edges if e.source == "outbound_gateway"} == {
-        "claude_reasoner",
+        "reasoner",
         "__end__",
     }
+
+
+_PAYLOAD_ONLY_MODULES = ("claude_node.py", "local_reasoner.py", "reasoning_prompt.py")
+_RAW_STATE_KEYS = ("raw_context", "anonymized_context", "anonymized_query", "citations")
+
+
+def test_the_providers_never_touch_the_raw_state():
+    """Los proveedores reciben un OutboundPayload, no el estado del grafo: ni siquiera nombran
+    las claves con datos crudos."""
+    for name in _PAYLOAD_ONLY_MODULES:
+        tree = ast.parse((PACKAGE_DIR / "nodes" / name).read_text(encoding="utf-8"))
+        docstrings = {
+            id(node.value)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+        }
+        strings = {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in docstrings
+        }
+        names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        assert not strings & set(_RAW_STATE_KEYS), name
+        assert "MHIAState" not in names and "state" not in names, name
 
 
 # -- Sensibilidad que se le pasa al gateway --------------------------------------------------

@@ -6,6 +6,7 @@ Responsabilidades de esta capa (el grafo no sabe de HTTP ni de sesiones):
     sesión; el cliente no puede elegirlos. Las membresías viajan en `state["memberships"]` y
     el retriever las usa para filtrar el contenido.
   - Tope de tiempo total y de consultas simultáneas (Ollama es un solo equipo).
+  - Indica qué proveedor redactó la respuesta (`reasoner`: local o claude).
   - Auditoría `mhia.query`: quién (user_id, rol), cuándo, huella SHA-256 y longitud de la
     consulta, resultado y número de fuentes. NUNCA el texto de la consulta ni de la respuesta.
     El `session_id` (uno por consulta) enlaza esta línea con las del gateway (`mhia.audit`).
@@ -31,6 +32,7 @@ from pipeline_ai.security.roles import Principal
 log = logging.getLogger("mhia.query")
 
 Status = Literal["answered", "no_evidence", "blocked"]
+Reasoner = Literal["local", "claude"]
 
 
 class QueryTimeoutError(Exception):
@@ -46,6 +48,7 @@ class QueryOutcome:
     status: Status
     answer: str
     sources: list[str]
+    reasoner: Reasoner | None = None
 
 
 def _status_of(result: dict) -> Status:
@@ -70,8 +73,15 @@ def to_outcome(result: dict) -> QueryOutcome:
     qué documentos se habrían usado."""
     status = _status_of(result)
     answer = str(result.get("final_answer", ""))
-    sources = _unique_sources(result) if status == "answered" else []
-    return QueryOutcome(status=status, answer=answer, sources=sources)
+    if status != "answered":
+        return QueryOutcome(status=status, answer=answer, sources=[])
+    reasoner = result.get("reasoner")
+    return QueryOutcome(
+        status=status,
+        answer=answer,
+        sources=_unique_sources(result),
+        reasoner=reasoner if reasoner in ("local", "claude") else None,
+    )
 
 
 def _fingerprint(text: str) -> str:
@@ -117,10 +127,11 @@ async def run_query(
 
     outcome = to_outcome(result)
     log.info(
-        "query_done %s status=%s sources=%d ms=%d",
+        "query_done %s status=%s sources=%d reasoner=%s ms=%d",
         base,
         outcome.status,
         len(outcome.sources),
+        outcome.reasoner or "-",
         _elapsed_ms(started),
     )
     return outcome

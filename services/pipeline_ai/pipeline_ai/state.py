@@ -12,8 +12,9 @@ Diseño clave para las reglas críticas:
   ([EMPRESA_1], [MONTO_1]...) sean consistentes entre la consulta y el contexto.
   `anonymized` es True solo si el anonimizador corrió y devolvió una salida válida.
   `placeholder_map` y `known_names` son SOLO locales (restaurar y verificar).
-- `outbound`: lo ÚNICO que el nodo Claude puede leer. Lo produce el outbound
-  gateway (privacy/outbound_gateway.py); sin él, Claude no se invoca.
+- `outbound`: lo ÚNICO que el nodo de razonamiento (Claude o el modelo local) puede
+  leer. Lo produce el outbound gateway (privacy/outbound_gateway.py); sin él, no se
+  invoca ningún modelo de razonamiento.
   `query`, `raw_context`, `citations` y `source_aliases` NUNCA cruzan esa frontera.
 - `source_aliases`: alias -> nombre real de la fuente. SOLO local.
 - `source_results`: (orquestación multi-agente, aún no cableada al grafo)
@@ -75,10 +76,13 @@ class MHIAState(TypedDict, total=False):
     # Variantes (texto) de los nombres propios detectados; el gateway verifica que ninguna
     # quede en lo que se envía. SOLO local.
     known_names: list[str]
-    # Resultado del outbound gateway. Ausente = envío bloqueado (Claude no se invoca).
+    # Resultado del outbound gateway. Ausente = envío bloqueado (no se razona).
     outbound: OutboundPayload | None
 
     # -- Salida ---------------------------------------------------------------
     final_answer: str
+    # Proveedor que respondió (REASONING_MODE). "local" también si Claude falló y se cayó a
+    # local.
+    reasoner: Literal["local", "claude"]
     aborted: bool
     abort_reason: str

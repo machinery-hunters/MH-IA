@@ -80,6 +80,11 @@ def test_api_dockerfile_does_not_run_as_root():
     assert user_lines and user_lines[-1].split()[1] not in {"root", "0"}
 
 
+def test_env_example_starts_in_the_free_local_reasoning_mode():
+    lines = (ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
+    assert "REASONING_MODE=local" in lines
+
+
 def test_secrets_are_gitignored():
     ignored = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert ".env" in ignored
@@ -88,11 +93,15 @@ def test_secrets_are_gitignored():
 
 def test_env_example_has_no_real_looking_secrets():
     text = (ROOT / ".env.example").read_text(encoding="utf-8")
-    assert "sk-ant-xxxxx" in text  # placeholder explícito
+    secrets = (
+        "ANTHROPIC_API_KEY=",
+        "API_SESSION_SECRET=",
+        "GHL_API_TOKEN=",
+        "SUPABASE_SERVICE_KEY=",
+        "POSTGRES_PASSWORD=",
+    )
     for line in text.splitlines():
-        if line.startswith(
-            ("API_SESSION_SECRET=", "GHL_API_TOKEN=", "SUPABASE_SERVICE_KEY=", "POSTGRES_PASSWORD=")
-        ):
+        if line.startswith(secrets):
             assert (
                 line.split("=", 1)[1] == ""
             ), f"valor no vacío en .env.example: {line.split('=')[0]}"

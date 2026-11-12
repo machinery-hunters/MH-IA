@@ -56,12 +56,17 @@ class QueryResponse(BaseModel):
     status: Literal["answered", "no_evidence", "blocked"]
     answer: str
     sources: list[str]
+    # Quién redactó la respuesta (solo con status=answered): "local" = modelo de la red local
+    # (modo sin costo, o Claude no disponible), "claude" = API de Anthropic.
+    reasoner: Literal["local", "claude"] | None = None
 
 
 def create_app(allowed_hosts: Sequence[str] | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        # Falla explícita al arrancar si falta un secreto crítico en producción.
+        # Falla explícita al arrancar si falta un secreto crítico en producción o si
+        # REASONING_MODE no es válido (con claude, sin ANTHROPIC_API_KEY).
+        settings.require_reasoning_mode()
         settings.require_production_secrets()
         # Abre la base de usuarios al arrancar: crea/migra el esquema (y, con Postgres, importa
         # una sola vez el auth.db anterior). Si la base no responde, la API no arranca.
@@ -151,7 +156,12 @@ def create_app(allowed_hosts: Sequence[str] | None = None) -> FastAPI:
                 status.HTTP_502_BAD_GATEWAY,
                 "No se pudo completar la consulta. Intenta de nuevo.",
             ) from None
-        return QueryResponse(status=outcome.status, answer=outcome.answer, sources=outcome.sources)
+        return QueryResponse(
+            status=outcome.status,
+            answer=outcome.answer,
+            sources=outcome.sources,
+            reasoner=outcome.reasoner,
+        )
 
     return app
 
