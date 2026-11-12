@@ -86,6 +86,7 @@ def test_altering_or_deleting_a_row_breaks_the_chain(auth_env, sql, broken):
 
     check = store.verify_audit_chain()
     assert not check.ok and check.broken_at == broken
+    assert check.rows == (1 if sql.startswith("DELETE") else broken - 1)
 
 
 def test_verification_works_across_batches(auth_env):
@@ -93,7 +94,8 @@ def test_verification_works_across_batches(auth_env):
     _fill(store, 7)
     assert store.verify_audit_chain(batch=2).rows == 7
     _tamper(store, "UPDATE audit_log SET action = 'x' WHERE id = 6")
-    assert store.verify_audit_chain(batch=2).broken_at == 6
+    check = store.verify_audit_chain(batch=2)
+    assert check.broken_at == 6 and check.rows == 5
 
 
 def test_unknown_categories_are_rejected(auth_env):
@@ -300,7 +302,8 @@ def test_audit_verify_fails_on_a_tampered_log(auth_env, capsys):
     _tamper(store, "UPDATE audit_log SET target = 'x' WHERE id = 2")
 
     assert IO().run("audit-verify") == 1
-    assert "fila 2" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "fila 2" in err and "1 filas correctas" in err
 
 
 def test_audit_log_can_filter_by_category(auth_env):

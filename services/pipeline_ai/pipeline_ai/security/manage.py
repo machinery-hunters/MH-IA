@@ -335,7 +335,7 @@ def _cmd_audit_verify(args: argparse.Namespace, **io: object) -> int:
     if not check.ok:
         raise CliError(
             f"el registro de auditoría NO es íntegro: la fila {check.broken_at} no cuadra "
-            f"({check.rows} filas verificadas antes)."
+            f"({check.rows} filas correctas antes de esa)."
         )
     out(f"Registro íntegro: {check.rows} filas. Última: {check.head_id} {check.head_hash}")
     if args.respaldo:

@@ -733,12 +733,17 @@ class AuthStore:
                     break
                 chunk = [dict(r) for r in rows]
                 # Ids consecutivos: un hueco es una fila borrada.
+                # `rows` en un fallo = filas que sí cuadraron antes de la rota.
                 for offset, row in enumerate(chunk, start=1):
                     if int(row["id"]) != last_id + offset:
-                        return AuditCheck(False, rows_seen, int(row["id"]), last_id, prev)
+                        return AuditCheck(
+                            False, rows_seen + offset - 1, int(row["id"]), last_id, prev
+                        )
                 broken = _chain_rows(chunk, prev_hash=prev)
                 if broken is not None:
-                    return AuditCheck(False, rows_seen, broken, last_id, prev)
+                    return AuditCheck(
+                        False, rows_seen + broken - last_id - 1, broken, last_id, prev
+                    )
                 rows_seen += len(chunk)
                 last_id = int(chunk[-1]["id"])
                 prev = chunk[-1]["row_hash"]
