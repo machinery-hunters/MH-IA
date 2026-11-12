@@ -1,6 +1,6 @@
 """
 Almacén de autenticación: usuarios, membresías por área, sesiones, intentos fallidos y el
-registro de cambios de permisos.
+registro de auditoría (cambios de permisos, accesos y consultas).
 
 Dos motores con el MISMO comportamiento (las pruebas corren contra ambos):
   - Postgres (`AUTH_BACKEND=postgres`): el de los despliegues con Docker (laptop y Mac
@@ -18,12 +18,19 @@ Reglas:
 - Todo SQL es parametrizado.
 - El estado de fuerza bruta se indexa por hash del nombre de usuario, existente o no, para que
   el bloqueo no revele qué usuarios existen.
-- `admin_audit` es de solo inserción: un disparador rechaza UPDATE y DELETE (protege contra
-  errores, no contra quien administra la base; ver SECURITY.md).
+- `audit_log` es de solo inserción: un disparador rechaza UPDATE y DELETE, y cada fila guarda
+  el hash de la anterior (hash encadenado), así que alterar, borrar o intercalar una fila rompe
+  la cadena y `verify_audit_chain()` lo detecta. Protege contra errores y alteraciones
+  ingenuas; quien administra la base podría rehacer la cadena entera, por eso la cabeza de la
+  cadena viaja también en cada respaldo (ver SECURITY.md).
+- Categorías del registro: `admin` (usuarios y permisos), `acceso` (inicios y cierres de
+  sesión, cambios de contraseña) y `consulta` (quién preguntó, la huella de la pregunta y qué
+  fragmentos se usaron; nunca el texto de la pregunta ni de la respuesta).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -51,8 +58,13 @@ log = logging.getLogger("mhia.auth_store")
 DB_ERRORS: tuple[type[Exception], ...] = (sqlite3.Error, psycopg.Error)
 
 # Versión del esquema. 1: membresías por área. 2: registro de cambios de permisos.
-SCHEMA_VERSION = 2
-EXPORT_FORMAT = 1
+# 3: registro único `audit_log` con hash encadenado (reemplaza a `admin_audit`).
+SCHEMA_VERSION = 3
+# Formato de exportación. 1: `admin_audit` sin hashes (se acepta al importar). 2: `audit_log`.
+EXPORT_FORMAT = 2
+AUDIT_CATEGORIES = ("admin", "acceso", "consulta")
+# Hash "anterior" de la primera fila de la cadena.
+GENESIS_HASH = "0" * 64
 
 # Migración 0 -> 1: cada usuario existente recibe las áreas equivalentes a lo que su rol
 # podía ver con el modelo anterior (por dominio), para no cambiar su acceso de golpe.
@@ -88,8 +100,20 @@ _EXPORT_COLUMNS: dict[str, tuple[str, ...]] = {
         "password_changed_at",
     ),
     "memberships": ("user_id", "area", "level"),
-    "admin_audit": ("id", "at", "actor", "action", "target", "detail"),
+    "audit_log": (
+        "id",
+        "at",
+        "category",
+        "actor",
+        "action",
+        "target",
+        "detail",
+        "prev_hash",
+        "row_hash",
+    ),
 }
+# Formato 1 (respaldos anteriores al bloque 4): el registro solo tenía cambios de permisos.
+_LEGACY_AUDIT_COLUMNS = ("id", "at", "actor", "action", "target", "detail")
 
 _SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -128,18 +152,22 @@ CREATE TABLE IF NOT EXISTS throttle (
 """
 
 _SQLITE_AUDIT_STATEMENTS = (
-    """CREATE TABLE IF NOT EXISTS admin_audit (
-    id     INTEGER PRIMARY KEY AUTOINCREMENT,
-    at     REAL NOT NULL,
-    actor  TEXT NOT NULL,
-    action TEXT NOT NULL,
-    target TEXT,
-    detail TEXT NOT NULL DEFAULT '{}'
+    """CREATE TABLE IF NOT EXISTS audit_log (
+    id        INTEGER PRIMARY KEY,
+    at        REAL NOT NULL,
+    category  TEXT NOT NULL,
+    actor     TEXT NOT NULL,
+    action    TEXT NOT NULL,
+    target    TEXT,
+    detail    TEXT NOT NULL DEFAULT '{}',
+    prev_hash TEXT NOT NULL,
+    row_hash  TEXT NOT NULL UNIQUE
 )""",
-    """CREATE TRIGGER IF NOT EXISTS admin_audit_no_update BEFORE UPDATE ON admin_audit
-BEGIN SELECT RAISE(ABORT, 'admin_audit es de solo insercion'); END""",
-    """CREATE TRIGGER IF NOT EXISTS admin_audit_no_delete BEFORE DELETE ON admin_audit
-BEGIN SELECT RAISE(ABORT, 'admin_audit es de solo insercion'); END""",
+    "CREATE INDEX IF NOT EXISTS audit_log_category ON audit_log(category, id)",
+    """CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit_log es de solo insercion'); END""",
+    """CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit_log es de solo insercion'); END""",
 )
 
 _PG_SCHEMA = """
@@ -180,26 +208,30 @@ CREATE TABLE IF NOT EXISTS throttle (
 """
 
 _PG_AUDIT = """
-CREATE TABLE IF NOT EXISTS admin_audit (
-    id     BIGSERIAL PRIMARY KEY,
-    at     DOUBLE PRECISION NOT NULL,
-    actor  TEXT NOT NULL,
-    action TEXT NOT NULL,
-    target TEXT,
-    detail TEXT NOT NULL DEFAULT '{}'
+CREATE TABLE IF NOT EXISTS audit_log (
+    id        BIGINT PRIMARY KEY,
+    at        DOUBLE PRECISION NOT NULL,
+    category  TEXT NOT NULL,
+    actor     TEXT NOT NULL,
+    action    TEXT NOT NULL,
+    target    TEXT,
+    detail    TEXT NOT NULL DEFAULT '{}',
+    prev_hash TEXT NOT NULL,
+    row_hash  TEXT NOT NULL UNIQUE
 );
-CREATE OR REPLACE FUNCTION mhia_admin_audit_append_only() RETURNS trigger
+CREATE INDEX IF NOT EXISTS audit_log_category ON audit_log(category, id);
+CREATE OR REPLACE FUNCTION mhia_audit_append_only() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
-    RAISE EXCEPTION 'admin_audit es de solo insercion';
+    RAISE EXCEPTION 'audit_log es de solo insercion';
 END;
 $$;
-DROP TRIGGER IF EXISTS admin_audit_no_change ON admin_audit;
-CREATE TRIGGER admin_audit_no_change BEFORE UPDATE OR DELETE ON admin_audit
-    FOR EACH ROW EXECUTE FUNCTION mhia_admin_audit_append_only();
-DROP TRIGGER IF EXISTS admin_audit_no_truncate ON admin_audit;
-CREATE TRIGGER admin_audit_no_truncate BEFORE TRUNCATE ON admin_audit
-    FOR EACH STATEMENT EXECUTE FUNCTION mhia_admin_audit_append_only();
+DROP TRIGGER IF EXISTS audit_log_no_change ON audit_log;
+CREATE TRIGGER audit_log_no_change BEFORE UPDATE OR DELETE ON audit_log
+    FOR EACH ROW EXECUTE FUNCTION mhia_audit_append_only();
+DROP TRIGGER IF EXISTS audit_log_no_truncate ON audit_log;
+CREATE TRIGGER audit_log_no_truncate BEFORE TRUNCATE ON audit_log
+    FOR EACH STATEMENT EXECUTE FUNCTION mhia_audit_append_only();
 """
 
 # Cada cuánto se refresca `last_seen` (evita una escritura por petición).
@@ -210,6 +242,8 @@ _MAX_BACKOFF = 8
 # Candado de Postgres para crear/migrar el esquema una sola vez aunque arranquen varios
 # procesos a la vez (API y CLI).
 _PG_LOCK_ID = 0x4D48_4941  # "MHIA"
+# Candado de Postgres que serializa las inserciones en `audit_log` (la cadena exige orden).
+_PG_AUDIT_LOCK_ID = 0x4D48_4155  # "MHAU"
 
 
 class UserExistsError(ValueError):
@@ -242,13 +276,108 @@ class SessionInfo:
 
 
 @dataclass(frozen=True)
-class AdminEvent:
+class AuditEvent:
     id: int
     at: float
+    category: str
     actor: str
     action: str
     target: str | None
     detail: dict[str, Any]
+
+
+# Nombre anterior (bloque 2b); se conserva para el código que ya lo usa.
+AdminEvent = AuditEvent
+
+
+@dataclass(frozen=True)
+class AuditCheck:
+    """Resultado de verificar la cadena: `broken_at` es el id de la primera fila que no
+    cuadra (None si todo cuadra). `head_id`/`head_hash` identifican la última fila."""
+
+    ok: bool
+    rows: int
+    broken_at: int | None
+    head_id: int
+    head_hash: str
+
+
+def _canonical_detail(detail: Mapping[str, Any] | None) -> str:
+    return json.dumps(dict(detail or {}), ensure_ascii=False, sort_keys=True)
+
+
+def audit_row_hash(
+    prev_hash: str,
+    row_id: int,
+    at: float,
+    category: str,
+    actor: str,
+    action: str,
+    target: str | None,
+    detail: str,
+) -> str:
+    """Hash de una fila del registro, encadenado con el de la anterior. `detail` es el texto
+    JSON tal como se guarda."""
+    payload = json.dumps(
+        [int(row_id), float(at), category, actor, action, target, detail],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(f"{prev_hash}\n{payload}".encode()).hexdigest()
+
+
+def _chain_rows(rows: list[dict[str, Any]], *, prev_hash: str = GENESIS_HASH) -> int | None:
+    """Recalcula la cadena de `rows` (en orden de id). Devuelve el id de la primera fila que
+    no cuadra, o None si todas cuadran."""
+    for row in rows:
+        expected = audit_row_hash(
+            prev_hash,
+            row["id"],
+            row["at"],
+            row["category"],
+            row["actor"],
+            row["action"],
+            row["target"],
+            row["detail"],
+        )
+        if row["prev_hash"] != prev_hash or row["row_hash"] != expected:
+            return int(row["id"])
+        prev_hash = row["row_hash"]
+    return None
+
+
+def chain_legacy_audit(rows: list[Mapping[str, Any]], *, category: str = "admin") -> list[dict]:
+    """Filas de `admin_audit` (sin hashes) convertidas a `audit_log`, encadenadas.
+
+    Se renumeran 1..n en su orden original: la secuencia de Postgres dejaba huecos cuando una
+    transacción se revertía, y en la cadena nueva un hueco significa "fila borrada"."""
+    chained: list[dict[str, Any]] = []
+    prev = GENESIS_HASH
+    for new_id, row in enumerate(sorted(rows, key=lambda r: int(r["id"])), start=1):
+        detail = row["detail"] if isinstance(row["detail"], str) else _canonical_detail(None)
+        item = {
+            "id": new_id,
+            "at": float(row["at"]),
+            "category": category,
+            "actor": row["actor"],
+            "action": row["action"],
+            "target": row["target"],
+            "detail": detail,
+            "prev_hash": prev,
+        }
+        item["row_hash"] = audit_row_hash(
+            prev,
+            item["id"],
+            item["at"],
+            category,
+            item["actor"],
+            item["action"],
+            item["target"],
+            detail,
+        )
+        prev = item["row_hash"]
+        chained.append(item)
+    return chained
 
 
 def _user(row: Mapping[str, Any]) -> User:
@@ -292,8 +421,9 @@ class AuthStore:
     def _reset_audit(self, conn: Any) -> None:
         raise NotImplementedError
 
-    def _after_audit_import(self, conn: Any) -> None:
-        """Ajustes tras insertar ids explícitos en admin_audit (secuencia en Postgres)."""
+    def _lock_audit(self, conn: Any) -> None:
+        """Serializa las inserciones en audit_log dentro de la transacción de `conn`."""
+        raise NotImplementedError
 
     # -- Usuarios ------------------------------------------------------------------------
 
@@ -471,9 +601,14 @@ class AuthStore:
                 memberships=self._memberships(conn, row["user_id"]),
             )
 
-    def delete_session(self, token_hash: str) -> None:
+    def delete_session(self, token_hash: str) -> str | None:
+        """Borra la sesión y devuelve a quién pertenecía (None si no existía)."""
         with self.connection() as conn:
+            row = conn.execute(
+                "SELECT user_id FROM sessions WHERE token_hash = ?", (token_hash,)
+            ).fetchone()
             conn.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+        return row["user_id"] if row else None
 
     def delete_user_sessions(self, user_id: str) -> int:
         with self.connection() as conn:
@@ -483,7 +618,53 @@ class AuthStore:
         with self.connection() as conn:
             return conn.execute("DELETE FROM sessions").rowcount
 
-    # -- Registro de cambios de permisos ---------------------------------------------------
+    # -- Registro de auditoría (hash encadenado) -----------------------------------------
+
+    def _append_event(
+        self,
+        conn: Any,
+        category: str,
+        actor: str,
+        action: str,
+        target: str | None,
+        detail: Mapping[str, Any] | None,
+        now: float | None,
+    ) -> tuple[int, str]:
+        if category not in AUDIT_CATEGORIES:
+            raise ValueError(f"categoría de auditoría desconocida: {category}")
+        self._lock_audit(conn)
+        last = conn.execute(
+            "SELECT id, row_hash FROM audit_log ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        row_id = int(last["id"]) + 1 if last else 1
+        prev_hash = last["row_hash"] if last else GENESIS_HASH
+        at = float(time.time() if now is None else now)
+        detail_text = _canonical_detail(detail)
+        row_hash = audit_row_hash(
+            prev_hash, row_id, at, category, actor, action, target, detail_text
+        )
+        conn.execute(
+            "INSERT INTO audit_log (id, at, category, actor, action, target, detail,"
+            " prev_hash, row_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (row_id, at, category, actor, action, target, detail_text, prev_hash, row_hash),
+        )
+        return row_id, row_hash
+
+    def record_event(
+        self,
+        category: str,
+        actor: str,
+        action: str,
+        target: str | None = None,
+        detail: Mapping[str, Any] | None = None,
+        *,
+        now: float | None = None,
+    ) -> tuple[int, str]:
+        """Agrega una fila al registro (id y hash de la fila). Nunca guarda contraseñas,
+        secretos, el texto de una consulta ni datos del negocio: solo quién, qué, sobre qué y
+        metadatos (huellas, identificadores de fragmentos, conteos)."""
+        with self.connection() as conn:
+            return self._append_event(conn, category, actor, action, target, detail, now)
 
     def record_admin_event(
         self,
@@ -494,28 +675,26 @@ class AuthStore:
         *,
         now: float | None = None,
     ) -> None:
-        """Deja constancia de un cambio de usuarios o permisos. Nunca guarda contraseñas,
-        secretos ni datos del negocio: solo quién, qué, a quién y el antes/después."""
-        with self.connection() as conn:
-            conn.execute(
-                "INSERT INTO admin_audit (at, actor, action, target, detail) VALUES (?, ?, ?, ?, ?)",
-                (
-                    time.time() if now is None else now,
-                    actor,
-                    action,
-                    target,
-                    json.dumps(dict(detail or {}), ensure_ascii=False, sort_keys=True),
-                ),
-            )
+        """Cambio de usuarios o permisos: solo quién, qué, a quién y el antes/después."""
+        self.record_event("admin", actor, action, target, detail, now=now)
 
-    def list_admin_events(self, limit: int = 50) -> list[AdminEvent]:
-        """Los `limit` eventos más recientes, del más nuevo al más viejo."""
+    def list_events(self, limit: int = 50, category: str | None = None) -> list[AuditEvent]:
+        """Los `limit` eventos más recientes (de una categoría o de todas), del más nuevo al
+        más viejo."""
+        limit = max(1, int(limit))
         with self.connection() as conn:
-            rows = conn.execute(
-                "SELECT id, at, actor, action, target, detail FROM admin_audit"
-                " ORDER BY id DESC LIMIT ?",
-                (max(1, int(limit)),),
-            ).fetchall()
+            if category is None:
+                rows = conn.execute(
+                    "SELECT id, at, category, actor, action, target, detail FROM audit_log"
+                    " ORDER BY id DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, at, category, actor, action, target, detail FROM audit_log"
+                    " WHERE category = ? ORDER BY id DESC LIMIT ?",
+                    (category, limit),
+                ).fetchall()
         events = []
         for row in rows:
             try:
@@ -523,9 +702,10 @@ class AuthStore:
             except ValueError:
                 detail = {"_ilegible": True}
             events.append(
-                AdminEvent(
+                AuditEvent(
                     id=int(row["id"]),
                     at=float(row["at"]),
+                    category=row["category"],
                     actor=row["actor"],
                     action=row["action"],
                     target=row["target"],
@@ -534,11 +714,50 @@ class AuthStore:
             )
         return events
 
+    def list_admin_events(self, limit: int = 50) -> list[AuditEvent]:
+        return self.list_events(limit, "admin")
+
+    def verify_audit_chain(self, *, batch: int = 5000) -> AuditCheck:
+        """Recalcula la cadena completa, por lotes."""
+        prev = GENESIS_HASH
+        last_id = 0
+        rows_seen = 0
+        with self.connection() as conn:
+            while True:
+                rows = conn.execute(
+                    "SELECT id, at, category, actor, action, target, detail, prev_hash, row_hash"
+                    " FROM audit_log WHERE id > ? ORDER BY id LIMIT ?",
+                    (last_id, batch),
+                ).fetchall()
+                if not rows:
+                    break
+                chunk = [dict(r) for r in rows]
+                # Ids consecutivos: un hueco es una fila borrada.
+                for offset, row in enumerate(chunk, start=1):
+                    if int(row["id"]) != last_id + offset:
+                        return AuditCheck(False, rows_seen, int(row["id"]), last_id, prev)
+                broken = _chain_rows(chunk, prev_hash=prev)
+                if broken is not None:
+                    return AuditCheck(False, rows_seen, broken, last_id, prev)
+                rows_seen += len(chunk)
+                last_id = int(chunk[-1]["id"])
+                prev = chunk[-1]["row_hash"]
+        return AuditCheck(True, rows_seen, None, last_id, prev)
+
+    def audit_hash_at(self, row_id: int) -> str | None:
+        """Hash de la fila `row_id` (None si no existe): para comparar con un respaldo."""
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT row_hash FROM audit_log WHERE id = ?", (int(row_id),)
+            ).fetchone()
+        return row["row_hash"] if row else None
+
     # -- Exportar / importar (respaldo y migración) ----------------------------------------
 
     def export_data(self) -> dict[str, Any]:
         """Usuarios, áreas y registro en un dict serializable a JSON. Sin sesiones ni
-        intentos fallidos: tras restaurar, todos vuelven a iniciar sesión."""
+        intentos fallidos: tras restaurar, todos vuelven a iniciar sesión. `audit_head` es la
+        última fila del registro (id y hash), para detectar después una cadena rehecha."""
         data: dict[str, Any] = {"format": EXPORT_FORMAT, "schema_version": SCHEMA_VERSION}
         with self.connection() as conn:
             for table, columns in _EXPORT_COLUMNS.items():
@@ -547,6 +766,12 @@ class AuthStore:
                     f"SELECT {', '.join(columns)} FROM {table} ORDER BY {order}"  # noqa: S608
                 ).fetchall()
                 data[table] = [{c: row[c] for c in columns} for row in rows]
+        audit = data["audit_log"]
+        data["audit_head"] = (
+            {"id": audit[-1]["id"], "hash": audit[-1]["row_hash"]}
+            if audit
+            else {"id": 0, "hash": GENESIS_HASH}
+        )
         return data
 
     def import_data(self, data: Mapping[str, Any], *, replace: bool) -> dict[str, int]:
@@ -555,17 +780,38 @@ class AuthStore:
         with self.connection() as conn:
             return self._import_into(conn, data, replace=replace)
 
+    @staticmethod
+    def _rows(data: Mapping[str, Any], table: str, columns: tuple[str, ...]) -> list[dict]:
+        rows = data.get(table, [])
+        if not isinstance(rows, list) or not all(
+            isinstance(r, Mapping) and set(r) == set(columns) for r in rows
+        ):
+            raise ImportDataError(f"la tabla {table} no tiene las columnas esperadas")
+        return [dict(r) for r in rows]
+
     def _import_into(self, conn: Any, data: Mapping[str, Any], *, replace: bool) -> dict[str, int]:
-        if not isinstance(data, Mapping) or data.get("format") != EXPORT_FORMAT:
+        if not isinstance(data, Mapping) or data.get("format") not in (1, EXPORT_FORMAT):
             raise ImportDataError("formato de exportación no soportado")
         tables: dict[str, list[dict[str, Any]]] = {}
         for table, columns in _EXPORT_COLUMNS.items():
-            rows = data.get(table, [])
-            if not isinstance(rows, list) or not all(
-                isinstance(r, Mapping) and set(r) == set(columns) for r in rows
-            ):
-                raise ImportDataError(f"la tabla {table} no tiene las columnas esperadas")
-            tables[table] = [dict(r) for r in rows]
+            if table == "audit_log" and data["format"] == 1:
+                # Respaldo anterior: el registro solo tenía cambios de permisos, sin hashes.
+                legacy = self._rows(data, "admin_audit", _LEGACY_AUDIT_COLUMNS)
+                tables[table] = chain_legacy_audit(legacy)
+            else:
+                tables[table] = self._rows(data, table, columns)
+        audit = sorted(tables["audit_log"], key=lambda r: int(r["id"]))
+        if [int(r["id"]) for r in audit] != list(range(1, len(audit) + 1)):
+            raise ImportDataError("el registro de auditoría tiene huecos o ids repetidos")
+        broken = _chain_rows(audit)
+        if broken is not None:
+            raise ImportDataError(f"el registro de auditoría no es íntegro (fila {broken})")
+        head = data.get("audit_head")
+        if data["format"] == EXPORT_FORMAT and head is not None:
+            last = audit[-1] if audit else {"id": 0, "row_hash": GENESIS_HASH}
+            if head != {"id": last["id"], "hash": last["row_hash"]}:
+                raise ImportDataError("el registro de auditoría no termina donde dice el respaldo")
+        tables["audit_log"] = audit
         if replace:
             for table in ("sessions", "throttle", "memberships", "users"):
                 conn.execute(f"DELETE FROM {table}")  # noqa: S608 - nombres fijos
@@ -581,8 +827,6 @@ class AuthStore:
                     f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})",  # noqa: S608
                     tuple(row[c] for c in columns),
                 )
-        if tables["admin_audit"]:
-            self._after_audit_import(conn)
         return {table: len(rows) for table, rows in tables.items()}
 
     def counts(self) -> dict[str, int]:
@@ -632,17 +876,31 @@ class SqliteAuthStore(AuthStore):
                         "INSERT INTO memberships (user_id, area, level) VALUES (?, ?, ?)",
                         (user["id"], area.value, int(level)),
                     )
-        if version < 2:
+        if version < 3:
             for statement in _SQLITE_AUDIT_STATEMENTS:
                 conn.execute(statement)
+            legacy = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'admin_audit'"
+            ).fetchone()
+            if legacy is not None:
+                rows = conn.execute(
+                    "SELECT id, at, actor, action, target, detail FROM admin_audit"
+                ).fetchall()
+                _insert_audit_rows(conn, chain_legacy_audit([dict(r) for r in rows]))
+                conn.execute("DROP TABLE admin_audit")
         if version < SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def _reset_audit(self, conn: sqlite3.Connection) -> None:
         # Los disparadores impiden borrar filas: se rehace la tabla (solo en restauración).
-        conn.execute("DROP TABLE IF EXISTS admin_audit")
+        conn.execute("DROP TABLE IF EXISTS audit_log")
         for statement in _SQLITE_AUDIT_STATEMENTS:
             conn.execute(statement)
+
+    def _lock_audit(self, conn: sqlite3.Connection) -> None:
+        # Escritura exclusiva desde ya: nadie más inserta entre leer la última fila e insertar.
+        if not conn.in_transaction:
+            conn.execute("BEGIN IMMEDIATE")
 
 
 class PostgresAuthStore(AuthStore):
@@ -705,8 +963,16 @@ class PostgresAuthStore(AuthStore):
             conn.execute(_PG_SCHEMA)
             row = conn.execute("SELECT version FROM schema_meta").fetchone()
             version = row["version"] if row else 0
-            if version < 2:
+            if version < 3:
                 conn.execute(_PG_AUDIT)
+                legacy = conn.execute("SELECT to_regclass('admin_audit') AS t").fetchone()["t"]
+                if legacy is not None:
+                    rows = conn.execute(
+                        "SELECT id, at, actor, action, target, detail FROM admin_audit"
+                    ).fetchall()
+                    _insert_audit_rows(_PgConn(conn), chain_legacy_audit([dict(r) for r in rows]))
+                    conn.execute("DROP TABLE admin_audit")
+                    conn.execute("DROP FUNCTION IF EXISTS mhia_admin_audit_append_only()")
             if row is None:
                 conn.execute("INSERT INTO schema_meta (version) VALUES (%s)", (SCHEMA_VERSION,))
             elif version < SCHEMA_VERSION:
@@ -728,16 +994,7 @@ class PostgresAuthStore(AuthStore):
             return None
         source = SqliteAuthStore(legacy)  # aplica antes sus propias migraciones
         counts = self._import_into(conn, source.export_data(), replace=False)
-        conn.execute(
-            "INSERT INTO admin_audit (at, actor, action, target, detail) VALUES (?, ?, ?, ?, ?)",
-            (
-                time.time(),
-                "sistema",
-                "migracion_desde_sqlite",
-                None,
-                json.dumps(counts, sort_keys=True),
-            ),
-        )
+        self._append_event(conn, "admin", "sistema", "migracion_desde_sqlite", None, counts, None)
         log.info("Migrado %s a Postgres: %s", legacy.name, counts)
         return counts
 
@@ -756,13 +1013,20 @@ class PostgresAuthStore(AuthStore):
 
     def _reset_audit(self, conn: _PgConn) -> None:
         # Los disparadores impiden DELETE y TRUNCATE: se rehace la tabla (solo en restauración).
-        conn.execute("DROP TABLE IF EXISTS admin_audit")
+        conn.execute("DROP TABLE IF EXISTS audit_log")
         conn._conn.execute(_PG_AUDIT)
 
-    def _after_audit_import(self, conn: _PgConn) -> None:
+    def _lock_audit(self, conn: _PgConn) -> None:
+        conn.execute("SELECT pg_advisory_xact_lock(?)", (_PG_AUDIT_LOCK_ID,))
+
+
+def _insert_audit_rows(conn: Any, rows: list[dict[str, Any]]) -> None:
+    columns = _EXPORT_COLUMNS["audit_log"]
+    for row in rows:
         conn.execute(
-            "SELECT setval(pg_get_serial_sequence('admin_audit', 'id'),"
-            " (SELECT MAX(id) FROM admin_audit))"
+            f"INSERT INTO audit_log ({', '.join(columns)})"  # noqa: S608 - columnas fijas
+            f" VALUES ({', '.join('?' for _ in columns)})",
+            tuple(row[c] for c in columns),
         )
 
 

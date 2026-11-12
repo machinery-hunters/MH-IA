@@ -37,9 +37,13 @@ export function AccountBar() {
           </Link>
         ))}
       </nav>
-      <span className="text-muted">
+      <Link
+        href="/cuenta"
+        className="text-muted underline-offset-4 hover:underline"
+        title="Mi cuenta: cambiar contraseña"
+      >
         {me.username} · {roleLabel(me.role)}
-      </span>
+      </Link>
       <button
         type="button"
         onClick={onSignOut}

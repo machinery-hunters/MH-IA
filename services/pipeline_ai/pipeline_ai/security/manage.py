@@ -8,7 +8,8 @@ Administración de usuarios desde el servidor (no hay registro público).
     python -m pipeline_ai.security.manage import-users --file /app/data/usuarios.xlsx [--apply]
     python -m pipeline_ai.security.manage enroll-totp --username ana
     python -m pipeline_ai.security.manage list-users
-    python -m pipeline_ai.security.manage audit-log [--limit 50]
+    python -m pipeline_ai.security.manage audit-log [--limit 50] [--categoria admin|acceso|consulta]
+    python -m pipeline_ai.security.manage audit-verify [--respaldo /app/backups]
 
 Áreas: direccion, comercial, sourcing, logistica, marketing, proyectos, finanzas, rh, taller,
 inventario, general. Niveles: PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED (plan maestro §2.5).
@@ -17,15 +18,20 @@ Las contraseñas SIEMPRE se piden por getpass (nunca por argumentos: quedarían 
 del shell). El secreto TOTP se muestra una sola vez al enrolar y se guarda cifrado.
 Cualquier cambio de rol/áreas/contraseña/estado revoca las sesiones abiertas del usuario.
 
-Cada cambio queda en el registro de cambios de permisos (`audit-log`): quién (la variable
-MHIA_ADMIN, o el usuario del sistema), qué, a quién y el antes/después. Nunca contraseñas ni
-secretos. Con Docker: `docker compose run --rm -e MHIA_ADMIN=fernando mhia-api python -m ...`.
+Cada cambio queda en el registro de auditoría (`audit-log`, categoría admin): quién (la
+variable MHIA_ADMIN, o el usuario del sistema), qué, a quién y el antes/después. Nunca
+contraseñas ni secretos. El mismo registro guarda los accesos y las consultas; `audit-verify`
+recalcula su hash encadenado y falla si alguna fila fue alterada o borrada; con `--respaldo`
+además comprueba que la última fila que guardó ese respaldo sigue igual en la base (detecta
+que alguien rehízo la cadena o recortó el final). Con Docker:
+`docker compose run --rm -e MHIA_ADMIN=fernando mhia-api python -m ...`.
 """
 
 from __future__ import annotations
 
 import argparse
 import getpass
+import json
 import os
 import sys
 from collections.abc import Callable, Sequence
@@ -39,7 +45,13 @@ from pipeline_ai.security.areas import (
     format_memberships,
     parse_memberships,
 )
-from pipeline_ai.security.auth_store import DB_ERRORS, User, UserExistsError, get_store
+from pipeline_ai.security.auth_store import (
+    AUDIT_CATEGORIES,
+    DB_ERRORS,
+    User,
+    UserExistsError,
+    get_store,
+)
 from pipeline_ai.security.roles import Role
 
 Out = Callable[[str], None]
@@ -303,15 +315,55 @@ def _cmd_revoke_sessions(args: argparse.Namespace, **io: object) -> int:
 
 def _cmd_audit_log(args: argparse.Namespace, **io: object) -> int:
     out: Out = io["out"]  # type: ignore[assignment]
-    events = get_store().list_admin_events(args.limit)
+    events = get_store().list_events(args.limit, args.categoria)
     if not events:
-        out("(sin cambios registrados)")
+        out("(sin eventos registrados)")
         return 0
     for event in events:
         when = datetime.fromtimestamp(event.at, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
         detail = ", ".join(f"{k}={v}" for k, v in sorted(event.detail.items()))
-        out(f"{when}  {event.actor:<20} {event.action:<22} {event.target or '-':<36} {detail}")
+        out(
+            f"{event.id:>6} {when}  {event.category:<8} {event.actor:<20} {event.action:<22} "
+            f"{event.target or '-':<36} {detail}"
+        )
     return 0
+
+
+def _cmd_audit_verify(args: argparse.Namespace, **io: object) -> int:
+    out: Out = io["out"]  # type: ignore[assignment]
+    check = get_store().verify_audit_chain()
+    if not check.ok:
+        raise CliError(
+            f"el registro de auditoría NO es íntegro: la fila {check.broken_at} no cuadra "
+            f"({check.rows} filas verificadas antes)."
+        )
+    out(f"Registro íntegro: {check.rows} filas. Última: {check.head_id} {check.head_hash}")
+    if args.respaldo:
+        _check_against_backup(Path(args.respaldo), out)
+    return 0
+
+
+def _check_against_backup(path: Path, out: Out) -> None:
+    from pipeline_ai.ops import backup
+
+    try:
+        target = path if (path / backup.MANIFEST_NAME).exists() else backup.latest_backup(path)
+        manifest = json.loads((target / backup.MANIFEST_NAME).read_text(encoding="utf-8"))
+    except (backup.BackupError, OSError, ValueError) as exc:
+        raise CliError(f"no se pudo leer el respaldo: {exc}") from None
+    head = (manifest.get("auth") or {}).get("audit_head")
+    if not isinstance(head, dict) or not isinstance(head.get("id"), int):
+        raise CliError(f"{target.name} no guarda la cabeza del registro (respaldo anterior).")
+    if head["id"] == 0:
+        out(f"{target.name}: el registro estaba vacío al respaldar; nada que comparar.")
+        return
+    current = get_store().audit_hash_at(head["id"])
+    if current != head.get("hash"):
+        raise CliError(
+            f"la fila {head['id']} ya no es la que guardó {target.name}: el registro fue "
+            "rehecho o recortado después del respaldo."
+        )
+    out(f"Coincide con {target.name}: la fila {head['id']} sigue igual.")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -354,8 +406,16 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--username")
     p.add_argument("--all", action="store_true")
 
-    p = sub.add_parser("audit-log", help="muestra los cambios de usuarios y permisos recientes")
+    p = sub.add_parser("audit-log", help="muestra los eventos recientes del registro")
     p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--categoria", choices=AUDIT_CATEGORIES, default=None)
+
+    p = sub.add_parser("audit-verify", help="verifica el hash encadenado del registro")
+    p.add_argument(
+        "--respaldo",
+        default=None,
+        help="carpeta de un respaldo (o la de todos: usa el último) para comparar su cabeza",
+    )
     return parser
 
 
@@ -382,6 +442,7 @@ def main(
         "list-users": _cmd_list_users,
         "revoke-sessions": _cmd_revoke_sessions,
         "audit-log": _cmd_audit_log,
+        "audit-verify": _cmd_audit_verify,
     }
     try:
         return handlers[args.command](args, **io)

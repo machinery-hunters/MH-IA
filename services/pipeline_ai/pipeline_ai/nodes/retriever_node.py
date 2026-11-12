@@ -148,7 +148,8 @@ async def retriever_node(state: MHIAState) -> dict:
         _query_fingerprint(query),
         len(results),
         settings.retrieval_score_threshold,
-        [(round(score, 4), doc.metadata.get("source", "?")) for doc, score in top],
+        # Identificador del fragmento, nunca el nombre del documento.
+        [(round(score, 4), doc.metadata.get("chunk_id", "?")) for doc, score in top],
     )
 
     accepted = await _select(query, results)

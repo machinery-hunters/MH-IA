@@ -275,3 +275,173 @@ def test_the_concurrency_setting_can_never_disable_the_api(monkeypatch):
     response = _post(_client(FakeGraph(), monkeypatch=monkeypatch, concurrency=0))
 
     assert response.status_code == 200
+
+
+# -- Registro encadenado de consultas -------------------------------------------------------
+
+
+def _query_events():
+    from pipeline_ai.security.auth_store import get_store
+
+    return list(reversed(get_store().list_events(category="consulta")))
+
+
+class _Outbound:
+    audit_hash = "f" * 64
+
+
+def test_each_query_is_recorded_with_who_and_which_fragments_but_never_the_text(monkeypatch):
+    from pipeline_ai.privacy.sensitivity import Sensitivity
+    from pipeline_ai.security.areas import Area
+    from pipeline_ai.security.auth_store import get_store
+
+    graph = FakeGraph(_answered(outbound=_Outbound()))
+    client = _client(graph, monkeypatch=monkeypatch)
+
+    async def principal() -> Principal:
+        return Principal(
+            user_id="u-123",
+            role=Role.LIDER,
+            username="ana",
+            memberships={Area.COMERCIAL: Sensitivity.CONFIDENTIAL},
+        )
+
+    client.app.dependency_overrides[get_current_principal] = principal
+    assert _post(client).status_code == 200
+
+    [event] = _query_events()
+    assert event.actor == "user:u-123" and event.action == "consulta"
+    assert event.target == graph.states[0]["session_id"]
+    detail = dict(event.detail)
+    assert isinstance(detail.pop("ms"), int)
+    assert detail == {
+        "role": "lider",
+        "areas": {"comercial": int(Sensitivity.CONFIDENTIAL)},
+        "query_sha256": query_service._fingerprint(QUERY),
+        "query_len": len(QUERY),
+        "status": "answered",
+        "reasoner": "local",
+        "chunks": ["a::0", "a::1", "b::0"],
+        "chunks_total": 3,
+        "outbound_hash": "f" * 64,
+    }
+    stored = repr(get_store().export_data())
+    for secret in ("Acme", "contrato 034", "1,250,000", "Contrato_034", "Anexo"):
+        assert secret not in stored
+    assert get_store().verify_audit_chain().ok
+
+
+def test_fragments_are_recorded_even_when_the_answer_is_blocked(monkeypatch):
+    result = _answered(aborted=True)
+    assert _post(_client(FakeGraph(result), monkeypatch=monkeypatch)).json()["sources"] == []
+
+    [event] = _query_events()
+    assert event.detail["status"] == "blocked" and event.detail["chunks_total"] == 3
+    assert event.detail["outbound_hash"] is None
+
+
+def test_the_number_of_recorded_fragments_is_capped(monkeypatch):
+    monkeypatch.setattr(query_service.settings, "audit_max_chunks", 2)
+    _post(_client(FakeGraph(), monkeypatch=monkeypatch))
+
+    [event] = _query_events()
+    assert event.detail["chunks"] == ["a::0", "a::1"] and event.detail["chunks_total"] == 3
+
+
+@pytest.mark.parametrize(
+    ("graph", "status", "http"),
+    [
+        (FakeGraph(error=ValueError("Acme")), "error", 502),
+        (FakeGraph(delay=1.0), "timeout", 504),
+    ],
+)
+def test_failed_queries_are_recorded_too(monkeypatch, graph, status, http):
+    monkeypatch.setattr(query_service.settings, "query_timeout_s", 0.05)
+    assert _post(_client(graph, monkeypatch=monkeypatch)).status_code == http
+
+    [event] = _query_events()
+    assert event.detail["status"] == status and event.detail["chunks"] == []
+
+
+def test_no_answer_is_delivered_if_the_query_cannot_be_recorded(monkeypatch, caplog):
+    import sqlite3
+
+    from pipeline_ai.security.auth_store import SqliteAuthStore
+
+    def boom(*_a, **_k):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(SqliteAuthStore, "record_event", boom)
+    response = _post(_client(FakeGraph(), monkeypatch=monkeypatch))
+
+    assert response.status_code == 502 and ANSWER not in response.text
+    assert "query_audit_failed" in caplog.text and "disk I/O" not in caplog.text
+
+
+# -- Límite por persona ---------------------------------------------------------------------
+
+
+def test_each_person_has_a_query_rate_limit(monkeypatch):
+    monkeypatch.setattr(query_service.settings, "query_rate_limit", 3)
+    monkeypatch.setattr(query_service.settings, "query_rate_window_s", 60)
+    graph = FakeGraph()
+    client = _client(graph, monkeypatch=monkeypatch)
+
+    assert [_post(client).status_code for _ in range(3)] == [200, 200, 200]
+    limited = _post(client)
+
+    assert limited.status_code == 429
+    assert 1 <= int(limited.headers["retry-after"]) <= 60
+    assert len(graph.states) == 3  # el grafo ni se invoca
+    assert len(_query_events()) == 3
+
+
+def test_the_rate_limit_is_per_person(monkeypatch):
+    monkeypatch.setattr(query_service.settings, "query_rate_limit", 1)
+    client = _client(FakeGraph(), monkeypatch=monkeypatch)
+    assert _post(client).status_code == 200
+    assert _post(client).status_code == 429
+
+    async def other() -> Principal:
+        return Principal(user_id="u-999", role=Role.LIDER, username="beto")
+
+    client.app.dependency_overrides[get_current_principal] = other
+    assert _post(client).status_code == 200
+
+
+def test_the_sliding_window_frees_slots_as_time_passes():
+    from pipeline_ai.api.rate_limit import SlidingWindowLimiter
+
+    now = [0.0]
+    limiter = SlidingWindowLimiter(2, 10, clock=lambda: now[0])
+
+    assert limiter.acquire("a") == 0
+    now[0] = 4
+    assert limiter.acquire("a") == 0
+    assert limiter.acquire("a") == 6  # la primera sale de la ventana en t=10
+    now[0] = 10
+    assert limiter.acquire("a") == 0
+    assert limiter.acquire("a") == 4
+    # Insistir no alarga la espera: los rechazos no cuentan.
+    now[0] = 14
+    assert limiter.acquire("a") == 0
+
+
+def test_a_zero_limit_disables_the_rate_limit():
+    from pipeline_ai.api.rate_limit import SlidingWindowLimiter
+
+    limiter = SlidingWindowLimiter(0, 60)
+    assert all(limiter.acquire("a") == 0 for _ in range(100))
+
+
+def test_the_limiter_forgets_idle_people():
+    from pipeline_ai.api.rate_limit import SlidingWindowLimiter
+
+    now = [0.0]
+    limiter = SlidingWindowLimiter(1, 10, clock=lambda: now[0])
+    for i in range(1100):
+        limiter.acquire(f"u{i}")
+    now[0] = 20
+    limiter.acquire("nuevo")
+
+    assert len(limiter._hits) == 1

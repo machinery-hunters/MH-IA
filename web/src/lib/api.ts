@@ -46,6 +46,11 @@ export interface QueryResponse {
   reasoner?: QueryReasoner | null;
 }
 
+export interface PasswordChange {
+  currentPassword: string;
+  newPassword: string;
+}
+
 export interface LoginInput {
   username: string;
   password: string;
@@ -133,6 +138,12 @@ export const api = {
       }),
     }),
   logout: () => request<void>("/api/v1/auth/logout", { method: "POST" }),
+  /** Cierra las demás sesiones; esta sigue con una cookie nueva que fija la API. */
+  changePassword: ({ currentPassword, newPassword }: PasswordChange) =>
+    request<void>("/api/v1/auth/password", {
+      method: "POST",
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
   connectors: () => request<ConnectorStatus[]>("/api/v1/connectors"),
   query: (query: string, signal?: AbortSignal) =>
     request<QueryResponse>("/api/v1/query", {

@@ -350,3 +350,11 @@ async def test_the_raw_query_is_never_written_to_the_logs(run, caplog, use_judge
 
     assert "Acme" not in caplog.text and "contrato 034" not in caplog.text
     assert f"len={len(secret_query)}" in caplog.text and "sha256=" in caplog.text
+
+
+async def test_candidate_logs_name_fragments_by_id_never_by_document(run, caplog):
+    with caplog.at_level(logging.DEBUG):
+        await run({"Nomina_Juan_Perez.pdf::3": 0.9})
+
+    assert "Nomina_Juan_Perez.pdf::3" in caplog.text  # chunk_id del documento falso
+    assert "Google Drive:" not in caplog.text

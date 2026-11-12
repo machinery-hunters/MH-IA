@@ -41,7 +41,7 @@ export default function ConsultarPage() {
       setError(
         queryErrorMessage(
           failure instanceof ApiError
-            ? { status: failure.status, detail: failure.detail }
+            ? { status: failure.status, detail: failure.detail, retryAfter: failure.retryAfter }
             : null,
         ),
       );

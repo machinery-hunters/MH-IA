@@ -1,5 +1,6 @@
 """
-Endpoints de sesión: POST /api/v1/auth/login y POST /api/v1/auth/logout.
+Endpoints de sesión: POST /api/v1/auth/login, POST /api/v1/auth/logout y
+POST /api/v1/auth/password (cambio de contraseña por la propia persona).
 
 No existe registro público: los usuarios se crean desde el servidor con
 `python -m pipeline_ai.security.manage` (ver SECURITY.md).
@@ -9,11 +10,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from pipeline_ai.api.deps import session_cookie_name
+from pipeline_ai.api.deps import get_current_principal, session_cookie_name
 from pipeline_ai.config import settings
 from pipeline_ai.security import auth
 from pipeline_ai.security.auth_store import DB_ERRORS
@@ -33,6 +34,18 @@ class LoginRequest(BaseModel):
     totp_code: str | None = Field(default=None, pattern=r"^\d{6}$")
 
 
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+def _unavailable(exc: BaseException, what: str) -> HTTPException:
+    log.error("%s no disponible: %s", what, type(exc).__name__)
+    return HTTPException(
+        status.HTTP_503_SERVICE_UNAVAILABLE, "Servicio de autenticación no disponible."
+    )
+
+
 def _set_session_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         key=session_cookie_name(),
@@ -50,10 +63,7 @@ def login(body: LoginRequest, response: Response) -> object:
     try:
         result = auth.authenticate(body.username, body.password, body.totp_code)
     except (*DB_ERRORS, auth.AuthConfigError) as exc:
-        log.error("Login no disponible: %s", type(exc).__name__)
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE, "Servicio de autenticación no disponible."
-        ) from None
+        raise _unavailable(exc, "Login") from None
 
     if result.status == "ok" and result.token and result.user:
         _set_session_cookie(response, result.token)
@@ -104,3 +114,32 @@ def logout(request: Request, response: Response) -> None:
         httponly=True,
         samesite="strict",
     )
+
+
+@router.post(
+    "/password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(get_current_principal)],
+)
+def change_password(body: PasswordChangeRequest, request: Request, response: Response) -> None:
+    token = request.cookies.get(session_cookie_name())
+    try:
+        result = auth.change_password(token, body.current_password, body.new_password)
+    except (*DB_ERRORS, auth.AuthConfigError) as exc:
+        raise _unavailable(exc, "Cambio de contraseña") from None
+
+    if result.status == "ok" and result.token:
+        # Las demás sesiones quedaron cerradas; esta sigue con una cookie nueva.
+        _set_session_cookie(response, result.token)
+        return
+    if result.status == "locked":
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Demasiados intentos. Intenta más tarde.",
+            headers={"Retry-After": str(result.retry_after)},
+        )
+    if result.status == "invalid":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "La contraseña actual no es correcta.")
+    if result.status == "policy":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, result.message)
+    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "No autenticado.")

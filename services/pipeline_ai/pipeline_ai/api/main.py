@@ -11,6 +11,7 @@ La GUI nunca importa el pipeline: solo habla con esta API.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Literal
@@ -24,10 +25,13 @@ from pipeline_ai.api.auth_routes import router as auth_router
 from pipeline_ai.api.deps import require_permission
 from pipeline_ai.api.origin import request_origin_ok
 from pipeline_ai.api.query_service import QueryFailedError, QueryTimeoutError, run_query
+from pipeline_ai.api.rate_limit import SlidingWindowLimiter
 from pipeline_ai.config import settings
 from pipeline_ai.connectors.registry import get_connectors
 from pipeline_ai.security.auth_store import close_store, get_store
 from pipeline_ai.security.roles import Permission, Principal, principal_view
+
+log = logging.getLogger("mhia.query")
 
 # Dependencias de autorización como singletons de módulo (patrón recomendado
 # por FastAPI y exigido por la regla B008 de ruff).
@@ -137,6 +141,7 @@ def create_app(allowed_hosts: Sequence[str] | None = None) -> FastAPI:
     # Consultas simultáneas acotadas (Ollama corre en un solo equipo). Mínimo 1: un valor
     # inválido en el entorno no puede dejar la API sin atender consultas.
     query_slots = asyncio.Semaphore(max(1, settings.query_max_concurrency))
+    query_limiter = SlidingWindowLimiter(settings.query_rate_limit, settings.query_rate_window_s)
 
     @app.post("/api/v1/query", response_model=QueryResponse)
     async def query(
@@ -144,6 +149,14 @@ def create_app(allowed_hosts: Sequence[str] | None = None) -> FastAPI:
         principal: Principal = _CAN_QUERY,
     ) -> QueryResponse:
         # El rol sale de la sesión (principal), nunca del cuerpo de la petición.
+        retry_after = query_limiter.acquire(principal.user_id)
+        if retry_after:
+            log.warning("query_rate_limited user_id=%s", principal.user_id)
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "Hiciste demasiadas consultas seguidas. Espera un momento.",
+                headers={"Retry-After": str(retry_after)},
+            )
         try:
             outcome = await run_query(principal, body.query, slots=query_slots)
         except QueryTimeoutError:

@@ -1,6 +1,8 @@
 /**
- * Funciones puras de la pantalla de consulta (sin dependencias, probadas con `npm test`).
+ * Funciones puras de la pantalla de consulta (sin dependencias externas, probadas con `npm test`).
  */
+
+import { formatWait } from "./auth-helpers.ts";
 
 export const MAX_QUERY_LENGTH = 2000; // mismo límite que valida la API (la API valida siempre)
 
@@ -39,6 +41,8 @@ export function canSubmitQuery(raw: string): boolean {
 export interface QueryFailure {
   status: number;
   detail?: string;
+  /** Solo en 429: segundos de espera según la cabecera Retry-After. */
+  retryAfter?: number;
 }
 
 /**
@@ -54,6 +58,8 @@ export function queryErrorMessage(failure: QueryFailure | null): string {
       return "Tu rol no tiene permiso para consultar.";
     case 422:
       return "La consulta no es válida. Escribe una pregunta de hasta 2000 caracteres.";
+    case 429:
+      return `Hiciste muchas consultas seguidas. Vuelve a intentarlo en ${formatWait(failure.retryAfter)}.`;
     case 502:
     case 504:
       return failure.detail ?? "No se pudo completar la consulta. Intenta de nuevo.";
