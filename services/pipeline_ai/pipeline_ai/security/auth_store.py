@@ -34,7 +34,9 @@ import hashlib
 import json
 import logging
 import os
+import secrets
 import sqlite3
+import threading
 import time
 import uuid
 from collections.abc import Iterator, Mapping
@@ -59,7 +61,9 @@ DB_ERRORS: tuple[type[Exception], ...] = (sqlite3.Error, psycopg.Error)
 
 # Versión del esquema. 1: membresías por área. 2: registro de cambios de permisos.
 # 3: registro único `audit_log` con hash encadenado (reemplaza a `admin_audit`).
-SCHEMA_VERSION = 3
+# 4: ventana de activación del segundo factor, activaciones pendientes e identificador
+#    público de cada sesión (para listarlas y cerrarlas sin exponer su hash).
+SCHEMA_VERSION = 4
 # Formato de exportación. 1: `admin_audit` sin hashes (se acepta al importar). 2: `audit_log`.
 EXPORT_FORMAT = 2
 AUDIT_CATEGORIES = ("admin", "acceso", "consulta")
@@ -149,6 +153,11 @@ CREATE TABLE IF NOT EXISTS throttle (
     locked_until REAL NOT NULL,
     updated      REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS totp_enrollments (
+    token_hash TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at REAL NOT NULL
+);
 """
 
 _SQLITE_AUDIT_STATEMENTS = (
@@ -205,6 +214,11 @@ CREATE TABLE IF NOT EXISTS throttle (
     locked_until DOUBLE PRECISION NOT NULL,
     updated      DOUBLE PRECISION NOT NULL
 );
+CREATE TABLE IF NOT EXISTS totp_enrollments (
+    token_hash TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at DOUBLE PRECISION NOT NULL
+);
 """
 
 _PG_AUDIT = """
@@ -232,6 +246,15 @@ CREATE TRIGGER audit_log_no_change BEFORE UPDATE OR DELETE ON audit_log
 DROP TRIGGER IF EXISTS audit_log_no_truncate ON audit_log;
 CREATE TRIGGER audit_log_no_truncate BEFORE TRUNCATE ON audit_log
     FOR EACH STATEMENT EXECUTE FUNCTION mhia_audit_append_only();
+"""
+
+# Esquema 4. Las sesiones abiertas no tienen id público: se cierran (todos vuelven a entrar).
+_PG_V4 = """
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enroll_until DOUBLE PRECISION;
+DELETE FROM sessions;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS public_id TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS device TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS sessions_public_id ON sessions(public_id);
 """
 
 # Cada cuánto se refresca `last_seen` (evita una escritura por petición).
@@ -264,6 +287,8 @@ class User:
     totp_enabled: bool
     totp_last_step: int | None
     active: bool
+    # Hasta cuándo puede activar su segundo factor desde la GUI (None = no puede).
+    totp_enroll_until: float | None = None
 
 
 @dataclass(frozen=True)
@@ -273,6 +298,20 @@ class SessionInfo:
     role: str
     mfa: bool
     memberships: dict[Area, Sensitivity] = field(default_factory=dict)
+    # Identificador público de la sesión (no sirve para autenticarse).
+    session_id: str = ""
+
+
+@dataclass(frozen=True)
+class SessionRow:
+    """Una sesión vigente tal como la ve su dueño: nunca el token ni su hash."""
+
+    session_id: str
+    created_at: float
+    last_seen: float
+    expires_at: float
+    mfa: bool
+    device: str
 
 
 @dataclass(frozen=True)
@@ -390,6 +429,7 @@ def _user(row: Mapping[str, Any]) -> User:
         totp_enabled=bool(row["totp_enabled"]),
         totp_last_step=row["totp_last_step"],
         active=bool(row["active"]),
+        totp_enroll_until=row["totp_enroll_until"],
     )
 
 
@@ -508,11 +548,60 @@ class AuthStore:
             )
 
     def enable_totp(self, user_id: str, step: int) -> None:
+        """Activa el factor y cierra la ventana de activación y lo pendiente."""
         with self.connection() as conn:
             conn.execute(
-                "UPDATE users SET totp_enabled = 1, totp_last_step = ? WHERE id = ?",
+                "UPDATE users SET totp_enabled = 1, totp_last_step = ?, totp_enroll_until = NULL"
+                " WHERE id = ?",
                 (step, user_id),
             )
+            conn.execute("DELETE FROM totp_enrollments WHERE user_id = ?", (user_id,))
+
+    def clear_totp(self, user_id: str) -> None:
+        """Quita el segundo factor (teléfono perdido). La persona no puede entrar hasta que
+        el administrador le abra una ventana o lo enrole por la CLI."""
+        with self.connection() as conn:
+            conn.execute(
+                "UPDATE users SET totp_secret_enc = NULL, totp_enabled = 0, totp_last_step = NULL"
+                " WHERE id = ?",
+                (user_id,),
+            )
+            conn.execute("DELETE FROM totp_enrollments WHERE user_id = ?", (user_id,))
+
+    def set_totp_enroll_window(self, user_id: str, until: float | None) -> None:
+        with self.connection() as conn:
+            conn.execute("UPDATE users SET totp_enroll_until = ? WHERE id = ?", (until, user_id))
+            if until is None:
+                conn.execute("DELETE FROM totp_enrollments WHERE user_id = ?", (user_id,))
+
+    def start_totp_enrollment(
+        self, token_hash: str, user_id: str, secret_enc: str, *, now: float, ttl_s: int
+    ) -> None:
+        """Guarda un secreto nuevo (sin activar) y la activación pendiente que lo confirma.
+        Una activación nueva reemplaza a la anterior de la misma persona."""
+        with self.connection() as conn:
+            conn.execute(
+                "DELETE FROM totp_enrollments WHERE user_id = ? OR expires_at <= ?",
+                (user_id, now),
+            )
+            conn.execute(
+                "UPDATE users SET totp_secret_enc = ?, totp_enabled = 0, totp_last_step = NULL"
+                " WHERE id = ?",
+                (secret_enc, user_id),
+            )
+            conn.execute(
+                "INSERT INTO totp_enrollments (token_hash, user_id, expires_at) VALUES (?, ?, ?)",
+                (token_hash, user_id, now + ttl_s),
+            )
+
+    def pending_totp_enrollment(self, token_hash: str, *, now: float) -> str | None:
+        """Usuario de una activación pendiente vigente (None si no existe o caducó)."""
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT user_id FROM totp_enrollments WHERE token_hash = ? AND expires_at > ?",
+                (token_hash, now),
+            ).fetchone()
+        return row["user_id"] if row else None
 
     def consume_totp_step(self, user_id: str, step: int) -> bool:
         """Marca el paso como usado de forma atómica. False si ya estaba usado (repetición)."""
@@ -564,15 +653,61 @@ class AuthStore:
     # -- Sesiones ------------------------------------------------------------------------
 
     def create_session(
-        self, token_hash: str, user_id: str, *, mfa: bool, now: float, absolute_s: int
-    ) -> None:
+        self,
+        token_hash: str,
+        user_id: str,
+        *,
+        mfa: bool,
+        now: float,
+        absolute_s: int,
+        device: str = "",
+    ) -> str:
+        """Crea la sesión y devuelve su identificador público."""
+        session_id = secrets.token_hex(8)
         with self.connection() as conn:
             conn.execute(
                 "INSERT INTO sessions (token_hash, user_id, mfa, created_at, last_seen,"
-                " expires_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (token_hash, user_id, int(mfa), now, now, now + absolute_s),
+                " expires_at, public_id, device) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (token_hash, user_id, int(mfa), now, now, now + absolute_s, session_id, device),
             )
             conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now,))
+        return session_id
+
+    def list_user_sessions(self, user_id: str, *, now: float, idle_s: int) -> list[SessionRow]:
+        """Sesiones vigentes de la persona, la más reciente primero."""
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT public_id, created_at, last_seen, expires_at, mfa, device FROM sessions"
+                " WHERE user_id = ? AND expires_at > ? AND last_seen >= ?"
+                " ORDER BY last_seen DESC",
+                (user_id, now, now - idle_s),
+            ).fetchall()
+        return [
+            SessionRow(
+                session_id=r["public_id"],
+                created_at=r["created_at"],
+                last_seen=r["last_seen"],
+                expires_at=r["expires_at"],
+                mfa=bool(r["mfa"]),
+                device=r["device"] or "",
+            )
+            for r in rows
+        ]
+
+    def delete_user_session(self, user_id: str, session_id: str) -> bool:
+        """Cierra UNA sesión de la persona por su id público. False si no es suya o no existe."""
+        with self.connection() as conn:
+            cur = conn.execute(
+                "DELETE FROM sessions WHERE user_id = ? AND public_id = ?", (user_id, session_id)
+            )
+            return cur.rowcount == 1
+
+    def delete_other_sessions(self, user_id: str, keep_session_id: str) -> int:
+        with self.connection() as conn:
+            return conn.execute(
+                "DELETE FROM sessions WHERE user_id = ? AND public_id <> ?",
+                (user_id, keep_session_id),
+            ).rowcount
 
     def lookup_session(self, token_hash: str, *, now: float, idle_s: int) -> SessionInfo | None:
         """Sesión vigente o None. Borra la sesión si caducó (absoluta o por inactividad) o si
@@ -580,7 +715,8 @@ class AuthStore:
         petición: un cambio de permisos rige desde la siguiente consulta."""
         with self.connection() as conn:
             row = conn.execute(
-                "SELECT s.user_id, s.mfa, s.last_seen, s.expires_at, u.username, u.role, u.active"
+                "SELECT s.user_id, s.mfa, s.last_seen, s.expires_at, s.public_id, u.username,"
+                " u.role, u.active"
                 " FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?",
                 (token_hash,),
             ).fetchone()
@@ -599,6 +735,7 @@ class AuthStore:
                 role=row["role"],
                 mfa=bool(row["mfa"]),
                 memberships=self._memberships(conn, row["user_id"]),
+                session_id=row["public_id"],
             )
 
     def delete_session(self, token_hash: str) -> str | None:
@@ -852,8 +989,13 @@ class SqliteAuthStore(AuthStore):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connection() as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.executescript(_SQLITE_SCHEMA)
+            # Cambiar el modo pide un candado exclusivo sin esperar: solo si hace falta.
+            if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+                conn.execute("PRAGMA journal_mode=WAL")
+            conn.executescript(_SQLITE_SCHEMA)  # todo IF NOT EXISTS: repetirlo no daña
+            # La migración va en una transacción de escritura: si dos procesos (API y CLI)
+            # abren la base a la vez, el segundo espera y ve la versión ya migrada.
+            conn.execute("BEGIN IMMEDIATE")
             self._migrate(conn)
         try:
             os.chmod(self.path, 0o600)  # best-effort: en Windows casi no tiene efecto
@@ -893,6 +1035,19 @@ class SqliteAuthStore(AuthStore):
                 ).fetchall()
                 _insert_audit_rows(conn, chain_legacy_audit([dict(r) for r in rows]))
                 conn.execute("DROP TABLE admin_audit")
+        if version < 4:
+            user_cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
+            if "totp_enroll_until" not in user_cols:
+                conn.execute("ALTER TABLE users ADD COLUMN totp_enroll_until REAL")
+            session_cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+            # Las sesiones abiertas no tienen id público: se cierran (todos vuelven a entrar).
+            conn.execute("DELETE FROM sessions")
+            if "public_id" not in session_cols:
+                conn.execute("ALTER TABLE sessions ADD COLUMN public_id TEXT")
+                conn.execute("ALTER TABLE sessions ADD COLUMN device TEXT")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS sessions_public_id ON sessions(public_id)"
+            )
         if version < SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -978,6 +1133,8 @@ class PostgresAuthStore(AuthStore):
                     _insert_audit_rows(_PgConn(conn), chain_legacy_audit([dict(r) for r in rows]))
                     conn.execute("DROP TABLE admin_audit")
                     conn.execute("DROP FUNCTION IF EXISTS mhia_admin_audit_append_only()")
+            if version < 4:
+                conn.execute(_PG_V4)
             if row is None:
                 conn.execute("INSERT INTO schema_meta (version) VALUES (%s)", (SCHEMA_VERSION,))
             elif version < SCHEMA_VERSION:
@@ -1036,6 +1193,9 @@ def _insert_audit_rows(conn: Any, rows: list[dict[str, Any]]) -> None:
 
 
 _stores: dict[tuple, AuthStore] = {}
+# La API atiende en varios hilos: sin candado, dos peticiones simultáneas al arrancar abrirían
+# dos almacenes (dos pools de Postgres) y migrarían la base a la vez.
+_stores_lock = threading.Lock()
 
 
 def _store_key() -> tuple:
@@ -1055,7 +1215,12 @@ def get_store() -> AuthStore:
     """Una instancia por configuración (los ajustes se leen en cada llamada)."""
     key = _store_key()
     store = _stores.get(key)
-    if store is None:
+    if store is not None:
+        return store
+    with _stores_lock:
+        store = _stores.get(key)
+        if store is not None:
+            return store
         if key[0] == "postgres":
             settings.require("postgres_password")
             store = PostgresAuthStore(

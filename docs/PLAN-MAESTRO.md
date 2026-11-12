@@ -63,7 +63,7 @@ su estado y se mueven sus decisiones a esos documentos.
 | Pipeline LangGraph | Router → retriever híbrido → juez local → anonimizador → pasarela de salida → Claude, con aborto sin evidencia | `pipeline_ai/graph.py`, `nodes/` |
 | Privacidad | Redactor determinista (el código reemplaza, el modelo solo detecta nombres), scrubber que bloquea si quedan hallazgos, restauración local | `privacy/`, `tests/test_graph_privacy_e2e.py` |
 | Recuperación | Densa + BM25 en Qdrant con fusión RRF, juez en Ollama, umbral de respaldo. Laboratorio: recall 0.81 → 1.00, precisión 0.16 → 0.68 | `retrieval/`, `lab/evaluar_recuperacion.py` |
-| Autenticación | argon2id, sesiones en servidor (SQLite), freno de fuerza bruta, TOTP obligatorio para `control_total`, CSRF por `SameSite=Strict` + `Origin` | `security/`, `api/auth_routes.py` |
+| Autenticación | argon2id, sesiones en servidor (Postgres), freno de fuerza bruta, TOTP obligatorio para `control_total` y para quien ve CONFIDENTIAL o más (activación desde la GUI en una ventana que abre el administrador), lista y cierre de sesiones propias, CSRF por `SameSite=Strict` + `Origin` | `security/`, `api/auth_routes.py` |
 | Autorización | 4 roles con permisos por endpoint y filtro por dominio en Qdrant con segunda capa | `security/roles.py`, `security/access.py` |
 | Multi-agente | Sub-agente con timeout y aislamiento, y supervisor de consolidación: **escritos y probados, todavía no cableados** al grafo | `agents/` |
 | Conectores | Drive funciona (ingesta incremental). ERP, CRM y Firestore son stubs con `ConnectorSpec` | `connectors/` |
@@ -121,7 +121,7 @@ su estado y se mueven sus decisiones a esos documentos.
 
 | # | Hueco | Fase que lo cierra |
 |---|---|---|
-| 1 | Cambio de contraseña, passkeys, auditoría de autenticación | F1 (contraseña y auditoría: **hechos**, bloque 4) y F5 (passkeys) |
+| 1 | Cambio de contraseña, passkeys, auditoría de autenticación | F1 (contraseña y auditoría: **hechos**, bloque 4; TOTP para quien ve CONFIDENTIAL y cerrar sesiones propias: **hechos**, bloque 5) y F5 (passkeys) |
 | 2 | Nombres de documentos en logs INFO | F1 (**hecho**, bloque 4) |
 | 3 | Nombres no detectados por el modelo local | F2 (entidades en ingesta + mejor modelo) |
 | 4 | Filtro solo por dominio, sin áreas ni `allowed_roles` | **F1** |
@@ -625,7 +625,7 @@ pantallas de administración de usuarios y áreas, y CSP con nonce.
 | Fuga de datos a Claude | Nombre no detectado, campo no previsto | Redactor determinista, scrubber que bloquea, pasarela única | Entidades conocidas desde la ingesta, mejor modelo de detección, listas blancas por conector | F2, F3 |
 | Fuga entre áreas | Usuario ve datos de otra área | Filtro por sensibilidad | Filtro rol × área × documento en cada fuente | **F1** |
 | Inyección de instrucciones | Texto malicioso en Drive o CRM | Claude sin herramientas, contexto delimitado, citas | Prueba adversarial en CI, marcar contenido sospechoso en la ingesta | F2 |
-| Robo de sesión o credencial | Phishing, equipo comprometido | argon2id, sesiones en servidor, TOTP en `control_total`, cookie `httpOnly` + `SameSite=Strict` | Passkeys, MFA para todos los roles con datos confidenciales, expiración y revocación de sesiones desde la GUI | F1, F5 |
+| Robo de sesión o credencial | Phishing, equipo comprometido | argon2id, sesiones en servidor, TOTP en `control_total` y en quien ve CONFIDENTIAL (bloque 5), cierre de sesiones propias desde la GUI, cookie `httpOnly` + `SameSite=Strict` | Passkeys | F5 |
 | Abuso por usuario autenticado | Extracción masiva de datos | Concurrencia y timeout por consulta | Rate limit por usuario, alerta por volumen anómalo, auditoría de fuentes vistas | F1 |
 | Exposición de red | Puerto abierto, servicio mal publicado | Solo `127.0.0.1`, sin puertos de Qdrant ni Ollama | Tailscale con grants, prueba automática de que nada escucha fuera de `127.0.0.1` | F0, F6 |
 | Cadena de suministro | Paquete o imagen comprometidos, modelo alterado | `pip-audit` y `npm audit` limpios hoy | Lockfiles, imágenes por digest, Dependabot, Trivy en CI, modelos por etiqueta exacta | F1 |
@@ -637,8 +637,8 @@ pantallas de administración de usuarios y áreas, y CSP con nonce.
 ### 6.3 Autenticación y autorización
 
 - **Autenticación:** usuario + contraseña (argon2id) + segundo factor.
-  - TOTP obligatorio hoy para `control_total`; se extiende a todo rol que vea
-    CONFIDENTIAL o más (fase 1).
+  - TOTP obligatorio para `control_total` y para quien tenga un área en
+    CONFIDENTIAL o más (**hecho**, 12 nov 2026, bloque 5; `MFA_REQUIRED_LEVEL`).
   - Passkeys como factor preferido (fase 5).
   - Sin registro público: altas solo por `configuracion` o `control_total`, con
     auditoría.
@@ -745,7 +745,7 @@ da 14/14 sin fugas y un backup se restaura en la laptop.
 - `allowed_roles` por documento.
 - Auditoría con hash encadenado; logs sin nombres de documentos.
 - Rate limit por usuario; cambio de contraseña; TOTP para roles con datos
-  confidenciales.
+  confidenciales (**hechos**, bloques 4 y 5).
 - Lockfiles, imágenes por digest, Dependabot y Trivy en CI.
 - Ollama nativo también en la laptop (paridad).
 

@@ -72,6 +72,8 @@ def create_app(allowed_hosts: Sequence[str] | None = None) -> FastAPI:
         # REASONING_MODE no es válido (con claude, sin ANTHROPIC_API_KEY).
         settings.require_reasoning_mode()
         settings.require_production_secrets()
+        # MFA_REQUIRED_LEVEL inválido: se detiene aquí en vez de fallar en cada login.
+        settings.require_mfa_level()
         # Abre la base de usuarios al arrancar: crea/migra el esquema (y, con Postgres, importa
         # una sola vez el auth.db anterior). Si la base no responde, la API no arranca.
         get_store()

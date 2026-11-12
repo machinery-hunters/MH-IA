@@ -6,8 +6,11 @@ Principios:
   devuelven lo mismo ("invalid") y tardan parecido (se verifica contra un hash descartable).
 - Fuerza bruta: tras `login_max_failures` fallos seguidos el usuario (exista o no) se bloquea,
   con espera creciente. Mientras está bloqueado NO se procesa la contraseña.
-- `control_total` exige segundo factor SIEMPRE; si no lo tiene enrolado no puede entrar.
-  Cualquier usuario con TOTP activado también lo exige.
+- Segundo factor: `control_total` lo exige SIEMPRE, y también quien tenga alguna área con
+  nivel MFA_REQUIRED_LEVEL o más (CONFIDENTIAL por defecto) o ya lo haya activado. Si le
+  falta, solo puede activarlo desde la GUI dentro de la ventana que abre el administrador
+  (`totp_enroll_until`); fuera de ella no entra. Una sesión sin segundo factor de alguien que
+  hoy lo necesita (le subieron el nivel de un área) deja de valer en la siguiente petición.
 - Un código TOTP no se puede reutilizar (anti-repetición, actualización atómica).
 - La cookie lleva un token opaco aleatorio (256 bits); en la base solo se guarda su HMAC.
 - Cada evento de acceso (entrada, fallo, bloqueo, salida, cambio de contraseña) queda en el
@@ -24,12 +27,14 @@ import logging
 import re
 import secrets
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
-from pipeline_ai.config import settings
+from pipeline_ai.config import MFA_LEVELS, settings
+from pipeline_ai.privacy.sensitivity import Sensitivity
 from pipeline_ai.security import clock, passwords, secretbox, totp
-from pipeline_ai.security.auth_store import SessionInfo, User, get_store
+from pipeline_ai.security.areas import Area
+from pipeline_ai.security.auth_store import SessionInfo, SessionRow, User, get_store
 from pipeline_ai.security.roles import Role
 
 log = logging.getLogger("mhia.auth")
@@ -37,7 +42,10 @@ log = logging.getLogger("mhia.auth")
 _USERNAME_RE = re.compile(r"^[a-z0-9._@-]{3,64}$")
 _MAX_TOKEN_CHARS = 128
 
-LoginStatus = Literal["ok", "invalid", "locked", "mfa_required", "mfa_not_enrolled", "unavailable"]
+LoginStatus = Literal[
+    "ok", "invalid", "locked", "mfa_required", "mfa_not_enrolled", "mfa_enrollment", "unavailable"
+]
+EnrollStatus = Literal["ok", "invalid", "expired", "locked", "unavailable"]
 PasswordChangeStatus = Literal["ok", "invalid", "locked", "policy", "no_session"]
 
 ANONYMOUS = "anonimo"
@@ -48,8 +56,28 @@ class AuthConfigError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class Enrollment:
+    """Lo que la persona necesita para agregar la cuenta a su app autenticadora. El token
+    (cookie aparte, corta) confirma la activación; el secreto solo se muestra esta vez."""
+
+    token: str
+    secret: str
+    otpauth_uri: str
+    expires_in: int
+
+
+@dataclass(frozen=True)
 class LoginResult:
     status: LoginStatus
+    token: str | None = None
+    user: SessionInfo | None = None
+    retry_after: int = 0
+    enrollment: Enrollment | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class EnrollResult:
+    status: EnrollStatus
     token: str | None = None
     user: SessionInfo | None = None
     retry_after: int = 0
@@ -99,8 +127,57 @@ def hash_token(token: str) -> str:
     ).hexdigest()
 
 
-def requires_mfa(user: User) -> bool:
-    return user.role == Role.CONTROL_TOTAL.value or user.totp_enabled
+def mfa_level() -> Sensitivity:
+    """Nivel de área desde el que se exige segundo factor (MFA_REQUIRED_LEVEL)."""
+    if settings.mfa_required_level not in MFA_LEVELS:
+        raise AuthConfigError("MFA_REQUIRED_LEVEL inválido: no se puede decidir el segundo factor.")
+    return Sensitivity[settings.mfa_required_level]
+
+
+def level_requires_mfa(memberships: dict[Area, Sensitivity]) -> bool:
+    # El umbral se valida siempre, también sin áreas: con la configuración rota nadie entra.
+    threshold = mfa_level()
+    return any(level >= threshold for level in memberships.values())
+
+
+def requires_mfa(user: User, memberships: dict[Area, Sensitivity] | None = None) -> bool:
+    if user.role == Role.CONTROL_TOTAL.value or user.totp_enabled:
+        return True
+    if memberships is None:
+        memberships = get_store().get_memberships(user.id)
+    return level_requires_mfa(memberships)
+
+
+def can_self_enroll(user: User, *, now: float) -> bool:
+    return user.totp_enroll_until is not None and user.totp_enroll_until > now
+
+
+_BROWSERS = (
+    ("Edg/", "Edge"),
+    ("Firefox/", "Firefox"),
+    ("Chrome/", "Chrome"),
+    ("Safari/", "Safari"),
+)
+_SYSTEMS = (
+    ("iPhone", "iPhone"),
+    ("iPad", "iPad"),
+    ("Android", "Android"),
+    ("Windows", "Windows"),
+    ("Mac OS X", "Mac"),
+    ("Macintosh", "Mac"),
+    ("Linux", "Linux"),
+)
+
+
+def device_label(user_agent: str | None) -> str:
+    """Etiqueta gruesa del equipo ("Chrome en Windows") para reconocer una sesión. No se
+    guarda la cabecera completa: versión y detalles sirven para rastrear, no para reconocer."""
+    ua = (user_agent or "")[:512]
+    browser = next((name for mark, name in _BROWSERS if mark in ua), "")
+    system = next((name for mark, name in _SYSTEMS if mark in ua), "")
+    if browser and system:
+        return f"{browser} en {system}"
+    return browser or system or "Equipo desconocido"
 
 
 def _fail(key: str, *, reason: str, raw_username: str) -> LoginResult:
@@ -121,7 +198,9 @@ def _username_hash(raw_username: str) -> str:
     return _short_hash(raw_username.lower())[:12]
 
 
-def authenticate(username: str, password: str, totp_code: str | None = None) -> LoginResult:
+def authenticate(
+    username: str, password: str, totp_code: str | None = None, *, device: str = ""
+) -> LoginResult:
     store = get_store()
     now = clock.now()
     key = throttle_key(username)
@@ -144,6 +223,9 @@ def authenticate(username: str, password: str, totp_code: str | None = None) -> 
     mfa_ok = False
     if requires_mfa(user):
         if not user.totp_enabled or not user.totp_secret_enc:
+            if can_self_enroll(user, now=now):
+                store.clear_failures(key)
+                return _start_enrollment(user, now=now)
             _audit("login_mfa_not_enrolled", actor=user_actor(user.id))
             return LoginResult("mfa_not_enrolled")
         if totp_code is None:
@@ -164,23 +246,99 @@ def authenticate(username: str, password: str, totp_code: str | None = None) -> 
 
     # Primero el registro: si no se puede auditar, no se entrega sesión.
     _audit("login_ok", actor=user_actor(user.id), role=user.role, mfa=mfa_ok)
-    token = _new_session(user.id, mfa=mfa_ok, now=now)
+    token, info = _open_session(user, mfa=mfa_ok, now=now, device=device)
+    return LoginResult("ok", token=token, user=info)
+
+
+def _new_session(user_id: str, *, mfa: bool, now: float, device: str = "") -> tuple[str, str]:
+    """Token para la cookie y el id público de la sesión."""
+    token = secrets.token_urlsafe(32)
+    session_id = get_store().create_session(
+        hash_token(token),
+        user_id,
+        mfa=mfa,
+        now=now,
+        absolute_s=settings.session_absolute_s,
+        device=device,
+    )
+    return token, session_id
+
+
+def _open_session(user: User, *, mfa: bool, now: float, device: str) -> tuple[str, SessionInfo]:
+    token, session_id = _new_session(user.id, mfa=mfa, now=now, device=device)
     info = SessionInfo(
         user_id=user.id,
         username=user.username,
         role=user.role,
-        mfa=mfa_ok,
+        mfa=mfa,
         memberships=get_store().get_memberships(user.id),
+        session_id=session_id,
     )
-    return LoginResult("ok", token=token, user=info)
+    return token, info
 
 
-def _new_session(user_id: str, *, mfa: bool, now: float) -> str:
+# -- Activación del segundo factor desde la GUI ------------------------------------------
+
+
+def enroll_key(user_id: str) -> str:
+    return "enroll:" + user_id
+
+
+def _start_enrollment(user: User, *, now: float) -> LoginResult:
+    secret = totp.generate_secret()
     token = secrets.token_urlsafe(32)
-    get_store().create_session(
-        hash_token(token), user_id, mfa=mfa, now=now, absolute_s=settings.session_absolute_s
+    ttl = settings.totp_enroll_ttl_s
+    # Se cifra antes de guardar nada: sin API_TOTP_KEY válida falla aquí (503).
+    get_store().start_totp_enrollment(
+        hash_token(token), user.id, secretbox.encrypt(secret), now=now, ttl_s=ttl
     )
-    return token
+    _audit("totp_activacion_iniciada", actor=user_actor(user.id))
+    return LoginResult(
+        "mfa_enrollment",
+        enrollment=Enrollment(
+            token=token,
+            secret=secret,
+            otpauth_uri=totp.provisioning_uri(secret, user.username),
+            expires_in=ttl,
+        ),
+    )
+
+
+def complete_enrollment(token: str | None, code: str, *, device: str = "") -> EnrollResult:
+    """Confirma la activación con el primer código de la app y abre la sesión."""
+    if not token or len(token) > _MAX_TOKEN_CHARS:
+        return EnrollResult("expired")
+    store = get_store()
+    now = clock.now()
+    user_id = store.pending_totp_enrollment(hash_token(token), now=now)
+    user = store.get_user(user_id) if user_id else None
+    # La ventana se revisa otra vez: el administrador pudo cerrarla mientras tanto.
+    if user is None or not user.active or not can_self_enroll(user, now=now):
+        return EnrollResult("expired")
+    key = enroll_key(user.id)
+    remaining = store.locked_for(key, now=now)
+    if remaining > 0:
+        return EnrollResult("locked", retry_after=int(remaining) + 1)
+    if not user.totp_secret_enc:
+        return EnrollResult("expired")
+    try:
+        secret = secretbox.decrypt(user.totp_secret_enc)
+    except secretbox.SecretBoxError:
+        log.error("No se pudo descifrar el secreto TOTP pendiente (revisa API_TOTP_KEY).")
+        return EnrollResult("unavailable")
+    step = totp.verify(secret, code, timestamp=now)
+    if step is None:
+        store.register_failure(
+            key, now=now, max_failures=settings.login_max_failures, lock_s=settings.login_lock_s
+        )
+        _audit("totp_activacion_fallida", actor=user_actor(user.id))
+        return EnrollResult("invalid")
+    store.clear_failures(key)
+    _audit("totp_activado", actor=user_actor(user.id))
+    store.enable_totp(user.id, step)  # también cierra la ventana y borra lo pendiente
+    _audit("login_ok", actor=user_actor(user.id), role=user.role, mfa=True)
+    session_token, info = _open_session(user, mfa=True, now=now, device=device)
+    return EnrollResult("ok", token=session_token, user=info)
 
 
 def resolve_session(token: str | None) -> SessionInfo | None:
@@ -192,10 +350,35 @@ def resolve_session(token: str | None) -> SessionInfo | None:
     )
     if info is None:
         return None
-    # control_total sin segundo factor verificado en ESTA sesión nunca opera.
-    if info.role == Role.CONTROL_TOTAL.value and not info.mfa:
+    # Sin segundo factor verificado en ESTA sesión no opera quien hoy lo necesita:
+    # control_total siempre, y quien tenga un área con nivel MFA_REQUIRED_LEVEL o más.
+    if not info.mfa and (
+        info.role == Role.CONTROL_TOTAL.value or level_requires_mfa(info.memberships)
+    ):
         return None
     return info
+
+
+# -- Sesiones de la propia persona ---------------------------------------------------------
+
+
+def list_sessions(info: SessionInfo) -> list[SessionRow]:
+    return get_store().list_user_sessions(
+        info.user_id, now=clock.now(), idle_s=settings.session_idle_s
+    )
+
+
+def close_session(info: SessionInfo, session_id: str) -> bool:
+    if not get_store().delete_user_session(info.user_id, session_id):
+        return False
+    _audit("cerrar_sesion", actor=user_actor(info.user_id), target=session_id)
+    return True
+
+
+def close_other_sessions(info: SessionInfo) -> int:
+    closed = get_store().delete_other_sessions(info.user_id, info.session_id)
+    _audit("cerrar_otras_sesiones", actor=user_actor(info.user_id), n=closed)
+    return closed
 
 
 def logout(token: str | None) -> None:
@@ -209,7 +392,9 @@ def password_change_key(user_id: str) -> str:
     return "password:" + user_id
 
 
-def change_password(token: str | None, current: str, new: str) -> PasswordChangeResult:
+def change_password(
+    token: str | None, current: str, new: str, *, device: str = ""
+) -> PasswordChangeResult:
     """Cambio de contraseña por la propia persona, con su sesión vigente.
 
     Exige la contraseña actual (con el mismo bloqueo por intentos que el login, en una llave
@@ -249,4 +434,5 @@ def change_password(token: str | None, current: str, new: str) -> PasswordChange
     store.set_password_hash(user.id, passwords.hash_password(new), now=now)
     closed = store.delete_user_sessions(user.id)
     log.info(json.dumps({"event": "sesiones_cerradas", "actor": actor, "n": closed}))
-    return PasswordChangeResult("ok", token=_new_session(user.id, mfa=info.mfa, now=now))
+    new_token, _ = _new_session(user.id, mfa=info.mfa, now=now, device=device)
+    return PasswordChangeResult("ok", token=new_token)

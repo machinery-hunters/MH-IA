@@ -122,7 +122,7 @@ def make_user(auth_env):
     return _make
 
 
-TABLES = ("users", "sessions", "memberships", "throttle", "audit_log")
+TABLES = ("users", "sessions", "memberships", "throttle", "audit_log", "totp_enrollments")
 
 
 def db_count(store, table: str) -> int:

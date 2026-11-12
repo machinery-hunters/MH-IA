@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 
+import { SessionsPanel } from "@/components/SessionsPanel";
 import { Shell } from "@/components/Shell";
 import { useSession } from "@/components/SessionProvider";
 import { api, ApiError } from "@/lib/api";
@@ -16,8 +17,9 @@ import {
 const INPUT_CLASS = "border border-line bg-panel p-3";
 
 /**
- * Mi cuenta: datos de la sesión y cambio de contraseña. El cambio cierra todas las demás
- * sesiones de la persona (otros equipos); esta sigue abierta con una cookie nueva.
+ * Mi cuenta: datos de la sesión, cambio de contraseña y sesiones abiertas. El cambio de
+ * contraseña cierra todas las demás sesiones de la persona (otros equipos); esta sigue
+ * abierta con una cookie nueva.
  */
 export default function CuentaPage() {
   const { session } = useSession();
@@ -27,6 +29,7 @@ export default function CuentaPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [sessionsKey, setSessionsKey] = useState(0);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -43,6 +46,7 @@ export default function CuentaPage() {
     try {
       await api.changePassword({ currentPassword: current, newPassword: next });
       setDone(true);
+      setSessionsKey((key) => key + 1);
     } catch (failure) {
       setError(
         passwordChangeErrorMessage(
@@ -141,6 +145,8 @@ export default function CuentaPage() {
           {busy ? "Guardando…" : "Cambiar contraseña"}
         </button>
       </form>
+
+      <SessionsPanel refreshKey={sessionsKey} />
     </Shell>
   );
 }

@@ -8,7 +8,7 @@ import pytest
 
 from pipeline_ai.nodes.outbound_node import sensitivity_for_state
 from pipeline_ai.privacy.sensitivity import Sensitivity
-from pipeline_ai.security import auth
+from pipeline_ai.security import auth, totp
 from pipeline_ai.security.areas import Area
 from pipeline_ai.security.auth_store import LEGACY_ROLE_MEMBERSHIPS, SCHEMA_VERSION, SqliteAuthStore
 from pipeline_ai.security.presets import PRESETS, preset_for
@@ -103,10 +103,11 @@ def test_corrupt_rows_in_the_database_are_ignored(auth_env, make_user):
 
 
 def test_the_session_carries_the_memberships_from_the_database(auth_env, make_user):
-    user = make_user()
+    secret = totp.generate_secret()
+    user = make_user(totp_secret=secret)  # CONFIDENTIAL exige segundo factor
     auth_env.store.set_memberships(user.id, {Area.LOGISTICA: C})
 
-    login = auth.authenticate("ana", PASSWORD)
+    login = auth.authenticate("ana", PASSWORD, totp.totp(secret, auth_env.clock.t))
     info = auth.resolve_session(login.token)
 
     assert info.memberships == {Area.LOGISTICA: C}
@@ -251,7 +252,10 @@ def test_reimport_updates_changed_people_and_closes_their_sessions(auth_env, dat
     assert auth_env.store.get_user(user.id).role == "lider"
     assert auth_env.store.get_user(user.id).active is True  # el estado no se toca
     assert auth.resolve_session(token) is None
-    assert auth.authenticate("jefa.ventas@mh.com", PASSWORD).status == "ok"  # ni la contraseña
+    # La contraseña no se toca; ahora ve CONFIDENTIAL, así que se le abrió la activación del
+    # segundo factor (y entra por ahí).
+    assert auth.authenticate("jefa.ventas@mh.com", PASSWORD).status == "mfa_enrollment"
+    assert "debe activar su segundo factor" in io.text
     assert "no se toca" in io.text and "exempleado@mh.com" in io.text
     assert auth_env.store.get_user_by_username("exempleado@mh.com") is not None
 

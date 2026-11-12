@@ -2,14 +2,20 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  enrollErrorMessage,
+  formatAgo,
   formatWait,
+  groupSecret,
   isValidTotpCode,
   loginErrorMessage,
   normalizeTotpCode,
+  parseMfaEnrollment,
   passwordChangeErrorMessage,
   passwordChangeProblem,
   roleLabel,
   safeNext,
+  sessionsErrorMessage,
+  sortSessions,
 } from "./auth-helpers.ts";
 
 describe("safeNext", () => {
@@ -166,5 +172,119 @@ describe("passwordChangeErrorMessage", () => {
     assert.match(passwordChangeErrorMessage({ status: 429, retryAfter: 600 }), /10 minutos/);
     assert.match(passwordChangeErrorMessage(null), /conectar/);
     assert.match(passwordChangeErrorMessage({ status: 503 }), /no está disponible/);
+  });
+});
+
+const VALID_ENROLLMENT = {
+  secret: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+  otpauth_uri: "otpauth://totp/MH%20IA%3Aana?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=MH%20IA",
+  qr: "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+  expires_in: 600,
+};
+
+describe("parseMfaEnrollment", () => {
+  it("acepta la respuesta del servidor y la pasa a camelCase", () => {
+    assert.deepEqual(parseMfaEnrollment(VALID_ENROLLMENT), {
+      secret: VALID_ENROLLMENT.secret,
+      otpauthUri: VALID_ENROLLMENT.otpauth_uri,
+      qr: VALID_ENROLLMENT.qr,
+      expiresIn: 600,
+    });
+  });
+
+  it("rechaza lo que no sea un objeto", () => {
+    for (const raw of [undefined, null, "x", 3, true]) {
+      assert.equal(parseMfaEnrollment(raw), null);
+    }
+  });
+
+  it("solo acepta un QR SVG en base64, nunca una URL externa", () => {
+    for (const qr of [
+      "https://evil.example/qr.png",
+      "data:image/svg+xml,<svg onload=alert(1)>",
+      "data:text/html;base64,PHNjcmlwdD4=",
+      "data:image/svg+xml;base64,<svg>",
+    ]) {
+      assert.equal(parseMfaEnrollment({ ...VALID_ENROLLMENT, qr }), null, qr);
+    }
+  });
+
+  it("rechaza URIs que no sean otpauth://totp y claves con caracteres raros", () => {
+    assert.equal(parseMfaEnrollment({ ...VALID_ENROLLMENT, otpauth_uri: "javascript:alert(1)" }), null);
+    assert.equal(parseMfaEnrollment({ ...VALID_ENROLLMENT, secret: "abc<script>" }), null);
+    assert.equal(parseMfaEnrollment({ ...VALID_ENROLLMENT, secret: "SHORT" }), null);
+  });
+
+  it("rechaza una duración inválida", () => {
+    for (const expires_in of [0, -5, Number.NaN, "600", null]) {
+      assert.equal(parseMfaEnrollment({ ...VALID_ENROLLMENT, expires_in }), null);
+    }
+  });
+});
+
+describe("groupSecret", () => {
+  it("agrupa de cuatro en cuatro", () => {
+    assert.equal(groupSecret("JBSWY3DPEHPK3PXP"), "JBSW Y3DP EHPK 3PXP");
+    assert.equal(groupSecret("ABCDEF"), "ABCD EF");
+    assert.equal(groupSecret(""), "");
+  });
+});
+
+describe("enrollErrorMessage", () => {
+  it("explica cada respuesta de la activación", () => {
+    assert.match(enrollErrorMessage({ status: 400 }), /hora de tu teléfono/);
+    assert.match(enrollErrorMessage({ status: 410 }), /caducó/);
+    assert.match(enrollErrorMessage({ status: 422 }), /6 dígitos/);
+    assert.equal(
+      enrollErrorMessage({ status: 429, retryAfter: 120 }),
+      "Demasiados intentos. Vuelve a intentarlo en 2 minutos.",
+    );
+    assert.match(enrollErrorMessage({ status: 503 }), /no está disponible/);
+    assert.match(enrollErrorMessage({ status: 500 }), /No se pudo activar/);
+    assert.match(enrollErrorMessage(null), /conectar/);
+  });
+});
+
+describe("formatAgo", () => {
+  const now = 1_700_000_000;
+  it("redondea hacia abajo a la unidad más grande", () => {
+    assert.equal(formatAgo(now - 5, now), "hace un momento");
+    assert.equal(formatAgo(now - 60, now), "hace 1 minuto");
+    assert.equal(formatAgo(now - 59 * 60, now), "hace 59 minutos");
+    assert.equal(formatAgo(now - 3600, now), "hace 1 hora");
+    assert.equal(formatAgo(now - 5 * 3600, now), "hace 5 horas");
+    assert.equal(formatAgo(now - 86400, now), "hace 1 día");
+    assert.equal(formatAgo(now - 3 * 86400, now), "hace 3 días");
+  });
+
+  it("un reloj adelantado no da tiempos negativos", () => {
+    assert.equal(formatAgo(now + 100, now), "hace un momento");
+  });
+});
+
+describe("sortSessions", () => {
+  it("pone esta sesión primero y luego las más recientes, sin mutar la entrada", () => {
+    const input = [
+      { id: "a", current: false, last_seen: 10 },
+      { id: "b", current: true, last_seen: 5 },
+      { id: "c", current: false, last_seen: 20 },
+    ];
+    assert.deepEqual(
+      sortSessions(input).map((s) => s.id),
+      ["b", "c", "a"],
+    );
+    assert.deepEqual(
+      input.map((s) => s.id),
+      ["a", "b", "c"],
+    );
+  });
+});
+
+describe("sessionsErrorMessage", () => {
+  it("distingue sesión inexistente, servicio caído y red", () => {
+    assert.match(sessionsErrorMessage({ status: 404 }), /ya no existe/);
+    assert.match(sessionsErrorMessage({ status: 503 }), /no está disponible/);
+    assert.match(sessionsErrorMessage({ status: 500 }), /No se pudo completar/);
+    assert.match(sessionsErrorMessage(null), /conectar/);
   });
 });

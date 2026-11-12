@@ -9,6 +9,7 @@
  * origen vía el proxy de Next); este código nunca ve ni guarda el token.
  */
 
+import { parseMfaEnrollment, type MfaEnrollment } from "@/lib/auth-helpers";
 import type { QueryReasoner, QueryStatus } from "@/lib/query-helpers";
 
 export type Permission = "query" | "configure_connectors" | "admin_system";
@@ -46,6 +47,22 @@ export interface QueryResponse {
   reasoner?: QueryReasoner | null;
 }
 
+export type { MfaEnrollment };
+
+/** Una sesión abierta de la persona (sin token: solo un id público para cerrarla). */
+export interface SessionSummary {
+  id: string;
+  /** Etiqueta gruesa del equipo, p. ej. "Chrome en Windows". */
+  device: string;
+  /** Segundos epoch. */
+  created_at: number;
+  last_seen: number;
+  expires_at: number;
+  mfa: boolean;
+  /** true para la sesión de este navegador. */
+  current: boolean;
+}
+
 export interface PasswordChange {
   currentPassword: string;
   newPassword: string;
@@ -74,6 +91,8 @@ export class ApiError extends Error {
     readonly retryAfter?: number,
     /** Solo en el login: la contraseña fue correcta y falta el código TOTP. */
     readonly mfaRequired: boolean = false,
+    /** Solo en el login: contraseña correcta y ventana abierta para activar el segundo factor. */
+    readonly mfaEnrollment: MfaEnrollment | null = null,
   ) {
     super(message);
   }
@@ -82,6 +101,7 @@ export class ApiError extends Error {
 interface ErrorBody {
   detail?: unknown;
   mfa_required?: unknown;
+  mfa_enrollment?: unknown;
 }
 
 function parseRetryAfter(value: string | null): number | undefined {
@@ -119,6 +139,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       detail,
       parseRetryAfter(response.headers.get("Retry-After")),
       body.mfa_required === true,
+      path === LOGIN_PATH ? parseMfaEnrollment(body.mfa_enrollment) : null,
     );
   }
 
@@ -137,7 +158,18 @@ export const api = {
         ...(totpCode ? { totp_code: totpCode } : {}),
       }),
     }),
+  /** Confirma la activación con el primer código; la cookie de activación la puso el login. */
+  enrollTotp: (totpCode: string) =>
+    request<Me>("/api/v1/auth/totp/enroll", {
+      method: "POST",
+      body: JSON.stringify({ totp_code: totpCode }),
+    }),
   logout: () => request<void>("/api/v1/auth/logout", { method: "POST" }),
+  sessions: () => request<SessionSummary[]>("/api/v1/auth/sessions"),
+  closeSession: (id: string) =>
+    request<void>(`/api/v1/auth/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  closeOtherSessions: () =>
+    request<{ closed: number }>("/api/v1/auth/sessions/close-others", { method: "POST" }),
   /** Cierra las demás sesiones; esta sigue con una cookie nueva que fija la API. */
   changePassword: ({ currentPassword, newPassword }: PasswordChange) =>
     request<void>("/api/v1/auth/password", {

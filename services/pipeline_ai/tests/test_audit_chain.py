@@ -11,6 +11,7 @@ import pytest
 from pipeline_ai.security.auth_store import (
     AUDIT_CATEGORIES,
     GENESIS_HASH,
+    SCHEMA_VERSION,
     ImportDataError,
     PostgresAuthStore,
     SqliteAuthStore,
@@ -252,7 +253,7 @@ def test_a_schema_2_sqlite_database_is_migrated_to_the_chained_log(tmp_path):
     assert [(e.id, e.action) for e in events] == [(2, "cambiar_rol"), (1, "crear_usuario")]
     assert store.verify_audit_chain().ok
     with store.connection() as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master").fetchall()}
     assert "admin_audit" not in tables
     store.record_event("acceso", "user:1", "login_ok")
@@ -281,7 +282,10 @@ def test_a_schema_2_postgres_database_is_migrated_to_the_chained_log(pg_schema):
         assert store.verify_audit_chain().ok
         with store.connection() as conn:
             assert conn.execute("SELECT to_regclass('admin_audit') AS t").fetchone()["t"] is None
-            assert conn.execute("SELECT version FROM schema_meta").fetchone()["version"] == 3
+            assert (
+                conn.execute("SELECT version FROM schema_meta").fetchone()["version"]
+                == SCHEMA_VERSION
+            )
     finally:
         store.close()
 

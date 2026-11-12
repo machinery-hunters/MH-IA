@@ -14,6 +14,8 @@ def _env_list(name: str, default: str) -> tuple[str, ...]:
 
 
 REASONING_MODES = ("local", "claude")
+# Niveles válidos de MFA_REQUIRED_LEVEL (nombres de privacy.sensitivity.Sensitivity).
+MFA_LEVELS = ("INTERNAL", "CONFIDENTIAL", "RESTRICTED")
 
 
 class Settings:
@@ -161,6 +163,15 @@ class Settings:
     # Fuerza bruta: tras N fallos seguidos de un usuario se bloquea su login `lock_s` segundos.
     login_max_failures: int = int(os.getenv("LOGIN_MAX_FAILURES", "5"))
     login_lock_s: int = int(os.getenv("LOGIN_LOCK_S", "900"))
+    # Segundo factor obligatorio para quien tenga alguna área con este nivel o más
+    # (INTERNAL, CONFIDENTIAL o RESTRICTED). control_total lo exige siempre.
+    mfa_required_level: str = os.getenv("MFA_REQUIRED_LEVEL", "CONFIDENTIAL").strip().upper()
+    # Ventana en la que la persona puede activar su segundo factor desde la GUI. La abre el
+    # administrador (create-user, reset-password, set-areas, allow-totp-enroll...): fuera de
+    # ella, una contraseña robada no basta para registrar otro teléfono.
+    totp_enroll_window_s: int = int(os.getenv("TOTP_ENROLL_WINDOW_S", "259200"))
+    # Minutos para escanear el QR y confirmar el primer código tras la contraseña.
+    totp_enroll_ttl_s: int = int(os.getenv("TOTP_ENROLL_TTL_S", "600"))
     # Cookie `Secure`: obligatoria en producción (HTTPS del tailnet). En desarrollo local
     # (http://localhost) se puede apagar con API_COOKIE_SECURE=false.
     cookie_secure: bool = _env_bool("API_COOKIE_SECURE", os.getenv("MHIA_ENV") == "production")
@@ -208,6 +219,15 @@ class Settings:
             self.require("anthropic_api_key")
         return self.reasoning_mode
 
+    def require_mfa_level(self) -> str:
+        """Valida MFA_REQUIRED_LEVEL al arrancar: un valor desconocido no se adivina."""
+        if self.mfa_required_level not in MFA_LEVELS:
+            raise RuntimeError(
+                f"MFA_REQUIRED_LEVEL debe ser {', '.join(MFA_LEVELS)} "
+                f"(valor actual: {self.mfa_required_level!r})."
+            )
+        return self.mfa_required_level
+
     def require_production_secrets(self) -> None:
         """Se llama al ARRANCAR la API (no al importar). En producción falla
         explícitamente si falta un secreto crítico o si DEBUG está activo."""
@@ -217,6 +237,7 @@ class Settings:
             raise RuntimeError("MHIA_DEBUG debe ser false cuando MHIA_ENV=production.")
         self.require("api_session_secret", "api_totp_key")
         self.require_reasoning_mode()  # con claude exige además ANTHROPIC_API_KEY
+        self.require_mfa_level()
         if len(self.api_session_secret) < 32:
             raise RuntimeError("API_SESSION_SECRET debe tener al menos 32 caracteres.")
         if not self.cookie_secure:
