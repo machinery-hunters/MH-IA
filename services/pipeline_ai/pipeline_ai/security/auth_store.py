@@ -36,6 +36,7 @@ import logging
 import os
 import secrets
 import sqlite3
+import threading
 import time
 import uuid
 from collections.abc import Iterator, Mapping
@@ -988,8 +989,13 @@ class SqliteAuthStore(AuthStore):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connection() as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.executescript(_SQLITE_SCHEMA)
+            # Cambiar el modo pide un candado exclusivo sin esperar: solo si hace falta.
+            if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+                conn.execute("PRAGMA journal_mode=WAL")
+            conn.executescript(_SQLITE_SCHEMA)  # todo IF NOT EXISTS: repetirlo no daña
+            # La migración va en una transacción de escritura: si dos procesos (API y CLI)
+            # abren la base a la vez, el segundo espera y ve la versión ya migrada.
+            conn.execute("BEGIN IMMEDIATE")
             self._migrate(conn)
         try:
             os.chmod(self.path, 0o600)  # best-effort: en Windows casi no tiene efecto
@@ -1187,6 +1193,9 @@ def _insert_audit_rows(conn: Any, rows: list[dict[str, Any]]) -> None:
 
 
 _stores: dict[tuple, AuthStore] = {}
+# La API atiende en varios hilos: sin candado, dos peticiones simultáneas al arrancar abrirían
+# dos almacenes (dos pools de Postgres) y migrarían la base a la vez.
+_stores_lock = threading.Lock()
 
 
 def _store_key() -> tuple:
@@ -1206,7 +1215,12 @@ def get_store() -> AuthStore:
     """Una instancia por configuración (los ajustes se leen en cada llamada)."""
     key = _store_key()
     store = _stores.get(key)
-    if store is None:
+    if store is not None:
+        return store
+    with _stores_lock:
+        store = _stores.get(key)
+        if store is not None:
+            return store
         if key[0] == "postgres":
             settings.require("postgres_password")
             store = PostgresAuthStore(

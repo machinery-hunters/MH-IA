@@ -604,3 +604,35 @@ def test_a_schema_3_postgres_database_gains_the_new_columns_and_closes_sessions(
         assert version == SCHEMA_VERSION
     finally:
         store.close()
+
+
+def test_concurrent_first_requests_open_and_migrate_the_database_only_once(tmp_path, monkeypatch):
+    """Varias peticiones simultáneas al arrancar (la API usa varios hilos) comparten un solo
+    almacén: antes, cada una migraba la base y chocaban al añadir columnas."""
+    import threading
+
+    from pipeline_ai.security import auth_store
+
+    monkeypatch.setattr(settings, "auth_backend", "sqlite")
+    monkeypatch.setattr(settings, "auth_db_path", str(tmp_path / "nueva.db"))
+    auth_store.close_store()
+    stores, errors = [], []
+    start = threading.Barrier(8)
+
+    def open_store():
+        start.wait()
+        try:
+            stores.append(auth_store.get_store())
+        except Exception as exc:  # noqa: BLE001 - se reporta abajo
+            errors.append(repr(exc))
+
+    threads = [threading.Thread(target=open_store) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    try:
+        assert errors == []
+        assert len({id(store) for store in stores}) == 1
+    finally:
+        auth_store.close_store()
