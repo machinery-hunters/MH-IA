@@ -3,9 +3,10 @@
 Sistema híbrido de inteligencia artificial de **Machinery Hunters**: conecta
 los sistemas de información de la empresa, recupera y estructura información
 localmente vía RAG (Ollama + Qdrant), y delega el razonamiento y la
-redacción final a un modelo de razonamiento avanzado (Claude, API de
-Anthropic), siempre con citas obligatorias y sin salir de la red de MH con
-datos crudos confidenciales.
+redacción final a un modelo de razonamiento: el modelo local por defecto
+(`REASONING_MODE=local`, sin costo) o Claude (API de Anthropic,
+`REASONING_MODE=claude`), siempre con citas obligatorias y sin salir de la red
+de MH con datos crudos confidenciales.
 
 > Documento de referencia completo: `SRS_MH_IA.docx` (Especificación de
 > Requisitos de Software — arquitectura, requisitos funcionales/no
@@ -34,8 +35,8 @@ Conectores (Drive, ERPNext, ...)
  Orquestador LangGraph (router → retriever → guardrail → anonymizer)
         │
         ▼
- Razonamiento y redacción (Claude, vía API) — solo contexto ya
- estructurado y anonimizado, citas obligatorias
+ Razonamiento y redacción (modelo local por defecto, o Claude vía API) —
+ solo contexto ya estructurado y anonimizado, citas obligatorias
 ```
 
 ## Empezar
@@ -76,7 +77,7 @@ services/pipeline_ai/
 │   ├── connectors/      # Drive, ERP, CRM, Firestore (stubs) + registro
 │   ├── privacy/         # sensibilidad, scrubber determinista y outbound gateway
 │   ├── security/        # roles y permisos (RBAC)
-│   ├── nodes/           # nodos del grafo actual (router, retriever, anonymizer, outbound gateway, claude, guardrail)
+│   ├── nodes/           # nodos del grafo actual (router, retriever, anonymizer, outbound gateway, reasoner: local o claude, guardrail)
 │   ├── ingestion/       # Google Drive -> Qdrant (funciona hoy)
 │   ├── config.py        # Settings centralizados
 │   ├── state.py         # Estado del grafo

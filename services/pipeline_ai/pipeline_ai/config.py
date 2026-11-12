@@ -13,6 +13,9 @@ def _env_list(name: str, default: str) -> tuple[str, ...]:
     return tuple(x.strip() for x in os.getenv(name, default).split(",") if x.strip())
 
 
+REASONING_MODES = ("local", "claude")
+
+
 class Settings:
     # ── Entorno ──────────────────────────────────────────────────────────
     # "production" activa require_production_secrets() al arrancar la API.
@@ -20,14 +23,31 @@ class Settings:
     # DEBUG apagado por defecto. Con True se exponen /docs y trazas más ricas.
     debug: bool = _env_bool("MHIA_DEBUG", False)
 
+    # ── Razonamiento ─────────────────────────────────────────────────────
+    # Quién redacta la respuesta final (plan maestro, sección 8.1):
+    #   local  -> modelo de Ollama (por defecto): sin costo y sin salida de red.
+    #   claude -> API de Anthropic (se paga por uso); si falla, responde el modelo local.
+    # La pasarela de salida y el anonimizador corren igual en los dos modos.
+    reasoning_mode: str = os.getenv("REASONING_MODE", "local").strip().lower()
+
     # ── Claude ───────────────────────────────────────────────────────────
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    # Tope por llamada a la API; al excederse responde el modelo local. Corto a propósito: la
+    # caída a local tiene que caber en QUERY_TIMEOUT_S.
+    claude_timeout_s: float = float(os.getenv("CLAUDE_TIMEOUT_S", "30"))
 
     # ── Ollama ───────────────────────────────────────────────────────────
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     ollama_llm_model: str = os.getenv("OLLAMA_LLM_MODEL", "llama3.1:8b")
     ollama_embed_model: str = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+    # Modelo que redacta la respuesta en modo local. En la Mac, el "modelo grande" del plan
+    # (sección 3.3) una vez medido; vacío = el mismo modelo de trabajo (OLLAMA_LLM_MODEL).
+    # Debe estar en scripts/ollama-models.txt (los doctores lo revisan).
+    ollama_reasoner_model: str = os.getenv("OLLAMA_REASONER_MODEL", "").strip() or ollama_llm_model
+    reasoner_timeout_s: float = float(os.getenv("REASONER_TIMEOUT_S", "90"))
+    reasoner_num_ctx: int = int(os.getenv("REASONER_NUM_CTX", "8192"))
+    reasoner_max_tokens: int = int(os.getenv("REASONER_MAX_TOKENS", "1024"))
 
     # ── Qdrant ───────────────────────────────────────────────────────────
     qdrant_url: str = os.getenv("QDRANT_URL", "http://localhost:6333")
@@ -99,8 +119,9 @@ class Settings:
     timeout_firestore_s: float = float(os.getenv("TIMEOUT_FIRESTORE_S", "10"))
     timeout_global_s: float = float(os.getenv("TIMEOUT_GLOBAL_S", "30"))
     # POST /api/v1/query: tope total por consulta (router + recuperación + anonimizador local +
-    # Claude) y consultas simultáneas. Ollama corre en un solo equipo: sin tope, una ráfaga lo
-    # satura y las demás consultas se acumulan.
+    # razonamiento, incluida la caída de Claude al modelo local) y consultas simultáneas.
+    # Ollama corre en un solo equipo: sin tope, una ráfaga lo satura y las demás consultas se
+    # acumulan.
     query_timeout_s: float = float(os.getenv("QUERY_TIMEOUT_S", "120"))
     query_max_concurrency: int = int(os.getenv("QUERY_MAX_CONCURRENCY", "2"))
 
@@ -168,6 +189,18 @@ class Settings:
                 f"Revisa tu archivo .env (ver .env.example)."
             )
 
+    def require_reasoning_mode(self) -> str:
+        """Valida REASONING_MODE (se llama al arrancar la API y en cada razonamiento). Un valor
+        desconocido es un error de configuración: no se adivina el proveedor."""
+        if self.reasoning_mode not in REASONING_MODES:
+            raise RuntimeError(
+                f"REASONING_MODE debe ser {' o '.join(REASONING_MODES)} "
+                f"(valor actual: {self.reasoning_mode!r})."
+            )
+        if self.reasoning_mode == "claude":
+            self.require("anthropic_api_key")
+        return self.reasoning_mode
+
     def require_production_secrets(self) -> None:
         """Se llama al ARRANCAR la API (no al importar). En producción falla
         explícitamente si falta un secreto crítico o si DEBUG está activo."""
@@ -175,7 +208,8 @@ class Settings:
             return
         if self.debug:
             raise RuntimeError("MHIA_DEBUG debe ser false cuando MHIA_ENV=production.")
-        self.require("anthropic_api_key", "api_session_secret", "api_totp_key")
+        self.require("api_session_secret", "api_totp_key")
+        self.require_reasoning_mode()  # con claude exige además ANTHROPIC_API_KEY
         if len(self.api_session_secret) < 32:
             raise RuntimeError("API_SESSION_SECRET debe tener al menos 32 caracteres.")
         if not self.cookie_secure:

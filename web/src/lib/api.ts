@@ -9,7 +9,7 @@
  * origen vía el proxy de Next); este código nunca ve ni guarda el token.
  */
 
-import type { QueryStatus } from "@/lib/query-helpers";
+import type { QueryReasoner, QueryStatus } from "@/lib/query-helpers";
 
 export type Permission = "query" | "configure_connectors" | "admin_system";
 
@@ -36,12 +36,14 @@ export interface ConnectorStatus {
  * no_evidence: sin información suficiente que este usuario pueda ver (o sin nada relevante).
  * blocked: el control de privacidad no autorizó el envío; no se consultó al servicio externo.
  */
-export type { QueryStatus };
+export type { QueryReasoner, QueryStatus };
 
 export interface QueryResponse {
   status: QueryStatus;
   answer: string;
   sources: string[];
+  /** local: modelo de la red local (modo sin costo, o Claude no disponible). null si no hubo respuesta. */
+  reasoner?: QueryReasoner | null;
 }
 
 export interface LoginInput {

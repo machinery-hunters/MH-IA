@@ -36,7 +36,8 @@ winget upgrade Ollama.Ollama          # o winget install Ollama.Ollama la primer
 
 # 1. Preparar variables (el .env NUNCA se versiona)
 Copy-Item .env.example .env
-# editar .env: ANTHROPIC_API_KEY como mínimo
+# editar .env: POSTGRES_PASSWORD como mínimo. Con REASONING_MODE=local (por defecto)
+# no hace falta ANTHROPIC_API_KEY.
 
 # 2. Modelos (una sola vez) y validar el entorno sin levantar nada
 .\scripts\dev.ps1 pull-models
@@ -69,6 +70,35 @@ pull`, cambia `OLLAMA_LLM_MODEL` en `.env`, mide con el laboratorio y, si se
 adopta, actualiza `scripts/ollama-models.txt` en un PR para que la Mac reciba
 exactamente el mismo.
 
+### Razonamiento: modelo local o Claude (`REASONING_MODE`)
+
+| Modo | Quién redacta la respuesta | Costo | Si falla |
+|---|---|---|---|
+| `local` (por defecto) | `OLLAMA_REASONER_MODEL` (vacío = `OLLAMA_LLM_MODEL`) | Ninguno | Error genérico (502); nada sale de la red |
+| `claude` | La API de Claude (`ANTHROPIC_MODEL`) | Por uso | Responde el modelo local y queda en la auditoría (`fallback_from`) |
+
+En los dos modos corren igual el anonimizador y la pasarela de salida: el modelo
+local recibe exactamente lo mismo que recibiría Claude, así que el laboratorio
+prueba la privacidad sin gastar. La respuesta de la API dice quién respondió
+(`"reasoner": "local"` o `"claude"`) y la GUI avisa cuando fue el modelo local.
+
+Para validar con Claude real (antes de cada entrega de fase, plan maestro 8.1):
+crédito prepagado de US$5–10 en la consola de Anthropic, recarga automática
+apagada y tope de gasto del espacio de trabajo en ese monto. Luego:
+
+```powershell
+# en .env: REASONING_MODE=claude y ANTHROPIC_API_KEY=sk-ant-...
+.\scripts\dev.ps1 doctor            # falla si falta la clave con REASONING_MODE=claude
+.\scripts\lab.ps1 ask               # el resumen dice cuántas respondió cada proveedor
+# al terminar, de vuelta a REASONING_MODE=local
+```
+
+Con un modelo de razonamiento distinto (por ejemplo el grande de la Mac,
+plan maestro 3.3), agrégalo a `scripts/ollama-models.txt` y fija
+`OLLAMA_REASONER_MODEL` en `.env`; los doctores fallan si el modelo no está en
+esa lista. Los modelos que "piensan" (Qwen3, gpt-oss) funcionan: el bloque
+`<think>` no se muestra al usuario.
+
 ---
 
 ## 2. Producción — Mac mini M5 Pro
@@ -93,7 +123,8 @@ mhia doctor
 - Respaldo diario a las 02:30 y chequeo de salud cada 5 minutos (launchd).
 
 En producción `MHIA_ENV=production`: la API **se niega a arrancar** si falta
-`ANTHROPIC_API_KEY`, `API_SESSION_SECRET` o `API_TOTP_KEY`, si el secreto de
+`API_SESSION_SECRET` o `API_TOTP_KEY` (o `ANTHROPIC_API_KEY` con
+`REASONING_MODE=claude`), si `REASONING_MODE` no es `local` ni `claude`, si el secreto de
 sesión mide menos de 32 caracteres, si `API_TOTP_KEY` no es una clave Fernet
 válida, si las cookies no son `Secure` o si `MHIA_DEBUG=true`.
 
@@ -280,4 +311,5 @@ tailscale serve --bg 3000
 - Si cambias `OLLAMA_EMBED_MODEL`, hay que **reindexar** la colección de Qdrant.
 - Las colecciones creadas antes de la búsqueda híbrida siguen funcionando, pero solo por significado, y la ingesta se niega a escribir en ellas. Para activar las palabras clave: cambia `QDRANT_COLLECTION` a un nombre nuevo, borra `sync_manifest.json`, corre la ingesta, apunta la API a la colección nueva y borra la anterior.
 - El juez de relevancia usa el mismo `OLLAMA_LLM_MODEL` que el router y el anonimizador (`RETRIEVAL_JUDGE_ENABLED=false` lo apaga y vuelve al umbral de score).
+- El razonamiento local usa `OLLAMA_REASONER_MODEL` (vacío = `OLLAMA_LLM_MODEL`). El modelo grande de la Mac (~18–20 GB) no cabe en la VRAM de la laptop: ahí se prueba con el de trabajo.
 - Las imágenes propias (`mhia-api`, `web`) compilan para `linux/amd64` y `linux/arm64` (verificado en CI).

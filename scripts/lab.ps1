@@ -10,8 +10,9 @@
 # Seguridad: el Qdrant del laboratorio escucha SOLO en 127.0.0.1, no usa volumen (los datos
 # mueren con el contenedor) y es distinto del Qdrant del compose normal. Los documentos son
 # inventados: no apuntes este laboratorio a datos reales.
-# Requiere Ollama corriendo (ollama serve) con llama3.1:8b y nomic-embed-text, y
-# ANTHROPIC_API_KEY en .env.
+# Requiere Ollama corriendo (ollama serve) con llama3.1:8b y nomic-embed-text. Por defecto
+# razona el modelo local (REASONING_MODE=local, sin costo); con REASONING_MODE=claude usa la
+# API de Claude y necesita ANTHROPIC_API_KEY en .env (gasta credito).
 
 param(
     [Parameter(Position = 0)]

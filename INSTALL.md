@@ -27,7 +27,7 @@ Acer Predator Helios Neo 16S AI · Core Ultra 9 · RTX 5070 Ti 12 GB · 32 GB RA
 ```powershell
 git clone <URL_DEL_REPO> mh-ia
 cd mh-ia
-Copy-Item .env.example .env       # editar ANTHROPIC_API_KEY como mínimo
+Copy-Item .env.example .env       # REASONING_MODE=local no necesita ANTHROPIC_API_KEY
 git config core.autocrlf false    # el repo ya normaliza saltos de línea (.gitattributes)
 .\scripts\dev.ps1 hooks           # activa el hook que protege main/develop
 .\scripts\dev.ps1 pull-models     # modelos exactos de scripts/ollama-models.txt
@@ -73,7 +73,7 @@ Todo lo instala y configura `sudo bash scripts/mac/setup.sh`. Pasos completos en
 
 | Credencial | Dónde se obtiene | Dónde se coloca |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | console.anthropic.com | `.env` |
+| `ANTHROPIC_API_KEY` (solo con `REASONING_MODE=claude`) | console.anthropic.com | `.env` |
 | `API_SESSION_SECRET` (≥ 32 caracteres) | Generarlo (ver `.env.example`) | `.env` |
 | `service_account.json` (Drive) | Google Cloud Console → Service Accounts (ver `INGESTION.md`) | `credentials/` |
 | `GOOGLE_DRIVE_FOLDER_ID` | URL de la carpeta compartida | `.env` |

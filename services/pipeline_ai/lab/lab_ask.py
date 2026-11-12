@@ -1,9 +1,11 @@
 """Prueba de laboratorio: corre preguntas reales por el grafo completo.
 
-Usa Ollama real (router, anonimizador, embeddings), Qdrant real (el del laboratorio) y la API
-real de Claude, solo con los documentos SINTETICOS de lab/docs. Por cada pregunta registra:
+Usa Ollama real (router, anonimizador, embeddings), Qdrant real (el del laboratorio) y el modelo
+de razonamiento de REASONING_MODE: el local por defecto (sin costo) o la API real de Claude
+(REASONING_MODE=claude), solo con los documentos SINTETICOS de lab/docs. Por cada pregunta registra:
 dominio detectado, si se anonimizo, si el gateway bloqueo, y si algun "canario" (dato
-sensible conocido de los documentos de prueba) llego en el texto que se enviaria a Claude.
+sensible conocido de los documentos de prueba) llego en el texto que recibe el modelo de
+razonamiento (el mismo en los dos modos).
 
   - Fuga de canario  -> FUGA (el unico resultado inaceptable).
   - Resultado fuera de lo esperado -> FALLA de comportamiento.
@@ -48,8 +50,10 @@ def _load_canaries() -> list[str]:
 
 def _preflight() -> None:
     problems: list[str] = []
-    if not settings.anthropic_api_key:
-        problems.append("Falta ANTHROPIC_API_KEY en .env")
+    try:
+        settings.require_reasoning_mode()
+    except RuntimeError as exc:
+        problems.append(str(exc))
     for name, url in (
         ("Ollama", f"{settings.ollama_base_url}/api/tags"),
         ("Qdrant", f"{settings.qdrant_url}/collections"),
@@ -123,6 +127,7 @@ async def run_one(question: dict, canaries: list[str]) -> dict:
         leaks=find_leaks(result, canaries),
         anonymized_query=result.get("anonymized_query", ""),
         anonymized_context=result.get("anonymized_context", ""),
+        reasoner=result.get("reasoner"),
         answer=result.get("final_answer", ""),
     )
     record["seconds"] = round(time.perf_counter() - started, 1)
@@ -147,7 +152,9 @@ async def main(only: str | None) -> int:
             raise SystemExit(f"No existe la pregunta '{only}'")
 
     records = []
-    print(f"\n{'id':<5} {'resultado':<9} {'salida':<17} {'dominio':<15} {'anon':<5} {'seg':>5}")
+    reasoner = settings.ollama_reasoner_model if settings.reasoning_mode == "local" else "Claude"
+    print(f"\nREASONING_MODE={settings.reasoning_mode} ({reasoner})")
+    print(f"{'id':<5} {'resultado':<9} {'salida':<17} {'dominio':<15} {'anon':<5} {'seg':>5}")
     print("-" * 62)
     for question in questions:
         rec = await run_one(question, canaries)
@@ -163,7 +170,7 @@ async def main(only: str | None) -> int:
             f"{rec['seconds']:>5}"
         )
         if rec["leaks"]:
-            print(f"      CANARIOS EN EL TEXTO ENVIADO A CLAUDE: {rec['leaks']}")
+            print(f"      CANARIOS EN EL TEXTO DEL RAZONAMIENTO: {rec['leaks']}")
         if rec["outcome"] == "blocked":
             print(f"      motivo del bloqueo: {rec['abort_reason']}")
         if rec["outcome"] == "error":
@@ -181,7 +188,8 @@ async def main(only: str | None) -> int:
         f"ok / FALLA / FUGA    : {verdicts.count('ok')} / "
         f"{verdicts.count('FALLA')} / {verdicts.count('FUGA')}"
     )
-    print(f"respondidas (Claude) : {len(answered)}")
+    by_local = sum(1 for r in answered if r.get("reasoner") == "local")
+    print(f"respondidas          : {len(answered)} (local {by_local}, Claude {len(answered) - by_local})")
     print(f"bloqueadas (gateway) : {len(blocked)}")
     print(f"router (dominio)     : {len(domain_ok)}/{len(domain_known)} aciertos")
 

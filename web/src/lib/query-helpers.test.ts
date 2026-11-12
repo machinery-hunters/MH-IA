@@ -5,6 +5,7 @@ import {
   MAX_QUERY_LENGTH,
   canSubmitQuery,
   queryErrorMessage,
+  reasonerNote,
   statusLabel,
 } from "./query-helpers.ts";
 
@@ -17,6 +18,15 @@ describe("statusLabel", () => {
     ];
     assert.equal(new Set(labels).size, 3);
     assert.equal(statusLabel("no_evidence"), "Sin información suficiente");
+  });
+});
+
+describe("reasonerNote", () => {
+  it("solo avisa cuando respondió el modelo local", () => {
+    assert.match(reasonerNote("local") ?? "", /modelo local/);
+    assert.equal(reasonerNote("claude"), null);
+    assert.equal(reasonerNote(null), null);
+    assert.equal(reasonerNote(undefined), null);
   });
 });
 

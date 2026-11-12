@@ -24,11 +24,13 @@ listo; la lógica de negocio arranca después del 27 de noviembre de 2026.**
                       Outbound gateway (único punto de salida)
                                    │
                                    ▼
-                       Claude (API) — solo razona y cita
+          Razonamiento — solo razona y cita (REASONING_MODE)
+          local: modelo de Ollama (por defecto) | claude: API, con caída a local
 ```
 
-Capa local (Ollama): clasifica, extrae, anonimiza. Capa de razonamiento
-(Claude): solo recibe contexto estructurado y anonimizado.
+Capa local (Ollama): clasifica, extrae, anonimiza. Capa de razonamiento (modelo
+local por defecto, o Claude con `REASONING_MODE=claude`): en los dos casos solo
+recibe contexto estructurado y anonimizado.
 
 ## Estructura del repositorio
 

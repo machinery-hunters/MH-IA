@@ -107,6 +107,34 @@ doctor() {
     grep -q '^MHIA_ENV=production' .env || log "AVISO: MHIA_ENV no es production en .env"
     # Solo se lee esa línea (sin ejecutar el .env). La API exige 24+ caracteres en producción.
     grep -Eq '^POSTGRES_PASSWORD=.{24,}$' .env || { err "POSTGRES_PASSWORD falta o tiene menos de 24 caracteres en .env"; problems=$((problems + 1)); }
+    # Razonamiento: con claude hace falta la clave (nunca se muestra) y cada consulta gasta
+    # crédito. El modelo local que redacta debe estar en scripts/ollama-models.txt.
+    mode="$(sed -nE 's/^REASONING_MODE=(.*)$/\1/p' .env | head -n 1 | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    mode="${mode:-local}"
+    case "$mode" in
+      local) log "REASONING_MODE=local (sin costo)" ;;
+      claude)
+        if grep -Eq '^ANTHROPIC_API_KEY=[^[:space:]]+' .env; then
+          log "AVISO: REASONING_MODE=claude: cada consulta gasta crédito de la API de Claude"
+        else
+          err "REASONING_MODE=claude sin ANTHROPIC_API_KEY en .env"
+          problems=$((problems + 1))
+        fi
+        ;;
+      *)
+        err "REASONING_MODE=$mode en .env: debe ser local o claude"
+        problems=$((problems + 1))
+        ;;
+    esac
+    reasoner="$(sed -nE 's/^OLLAMA_REASONER_MODEL=([^[:space:]]+).*$/\1/p' .env | head -n 1)"
+    if [ -n "$reasoner" ]; then
+      if expected_models | awk -v t="$reasoner" '$1 == t || $1 == t ":latest" { found = 1 } END { exit !found }'; then
+        log "Modelo de razonamiento $reasoner (en ollama-models.txt)"
+      else
+        err "OLLAMA_REASONER_MODEL=$reasoner no está en scripts/ollama-models.txt"
+        problems=$((problems + 1))
+      fi
+    fi
   fi
   git check-ignore -q .env || { err ".env NO está ignorado por git"; problems=$((problems + 1)); }
   if ! "${COMPOSE[@]}" config --quiet; then

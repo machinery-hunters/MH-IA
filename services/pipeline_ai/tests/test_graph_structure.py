@@ -23,7 +23,7 @@ def test_graph_has_expected_nodes():
         "retriever",
         "anonymizer",
         "outbound_gateway",
-        "claude_reasoner",
+        "reasoner",
         "abort",
     }
     assert expected.issubset(nodes)
