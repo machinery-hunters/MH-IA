@@ -7,6 +7,8 @@ Administración de usuarios desde el servidor (no hay registro público).
     python -m pipeline_ai.security.manage set-areas --username ana --areas "comercial:CONFIDENTIAL"
     python -m pipeline_ai.security.manage import-users --file /app/data/usuarios.xlsx [--apply]
     python -m pipeline_ai.security.manage enroll-totp --username ana
+    python -m pipeline_ai.security.manage allow-totp-enroll --username ana   (o --pendientes)
+    python -m pipeline_ai.security.manage reset-totp --username ana         (teléfono perdido)
     python -m pipeline_ai.security.manage list-users
     python -m pipeline_ai.security.manage audit-log [--limit 50] [--categoria admin|acceso|consulta]
     python -m pipeline_ai.security.manage audit-verify [--respaldo /app/backups]
@@ -17,6 +19,11 @@ inventario, general. Niveles: PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED (plan m
 Las contraseñas SIEMPRE se piden por getpass (nunca por argumentos: quedarían en el historial
 del shell). El secreto TOTP se muestra una sola vez al enrolar y se guarda cifrado.
 Cualquier cambio de rol/áreas/contraseña/estado revoca las sesiones abiertas del usuario.
+
+Segundo factor: lo exige control_total y quien tenga un área con nivel MFA_REQUIRED_LEVEL o
+más. Si la persona aún no lo tiene, create-user, reset-password, set-areas, set-role,
+enable-user e import-users le abren una ventana (TOTP_ENROLL_WINDOW_S, 72 h por defecto) para
+activarlo ella misma desde la GUI con su contraseña; allow-totp-enroll la abre a mano.
 
 Cada cambio queda en el registro de auditoría (`audit-log`, categoría admin): quién (la
 variable MHIA_ADMIN, o el usuario del sistema), qué, a quién y el antes/después. Nunca
@@ -38,6 +45,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pipeline_ai.config import settings
 from pipeline_ai.security import auth, clock, passwords, secretbox, totp, user_import
 from pipeline_ai.security.areas import (
     AREA_MIN_SENSITIVITY,
@@ -92,6 +100,32 @@ def _ask_new_password(username: str, getpass_fn: Callable[[str], str]) -> str:
     except passwords.PasswordPolicyError as exc:
         raise CliError(str(exc)) from None
     return first
+
+
+def _open_enrollment_if_needed(user: User, out: Out) -> bool:
+    """Si la persona necesita segundo factor y no lo tiene, le abre la ventana para activarlo
+    desde la GUI. Devuelve True si la abrió."""
+    current = get_store().get_user(user.id) or user
+    if current.totp_enabled or not current.active or not auth.requires_mfa(current):
+        return False
+    _open_enrollment(current, out)
+    return True
+
+
+def _open_enrollment(user: User, out: Out) -> None:
+    window = settings.totp_enroll_window_s
+    until = clock.now() + window
+    get_store().set_totp_enroll_window(user.id, until)
+    _audit("abrir_activacion_totp", user.username, horas=round(window / 3600, 1))
+    out(
+        f"'{user.username}' debe activar su segundo factor: al entrar en la GUI con su "
+        f"contraseña verá un código QR. Tiene {_hours(window)} para hacerlo."
+    )
+
+
+def _hours(seconds: int) -> str:
+    hours = seconds / 3600
+    return f"{hours:g} horas" if hours != 1 else "1 hora"
 
 
 def _enroll_totp(
@@ -150,7 +184,9 @@ def _cmd_create_user(args: argparse.Namespace, **io: object) -> int:
     out(f"Usuario '{username}' creado con rol {args.role}.")
     _report_areas(memberships, out)
 
-    if args.role == Role.CONTROL_TOTAL.value:
+    if args.role != Role.CONTROL_TOTAL.value:
+        _open_enrollment_if_needed(user, out)
+    else:
         out("El rol control_total exige segundo factor: se enrola ahora.")
         if not _enroll_totp(user, input_fn, out):
             out(
@@ -178,6 +214,7 @@ def _cmd_reset_password(args: argparse.Namespace, **io: object) -> int:
     store.clear_failures(auth.throttle_key(user.username))
     _audit("cambiar_contrasena", user.username)
     out(f"Contraseña de '{user.username}' actualizada; sus sesiones fueron cerradas.")
+    _open_enrollment_if_needed(user, out)
     return 0
 
 
@@ -189,8 +226,7 @@ def _cmd_set_role(args: argparse.Namespace, **io: object) -> int:
     store.delete_user_sessions(user.id)
     _audit("cambiar_rol", user.username, antes=user.role, despues=args.role)
     out(f"Rol de '{user.username}': {args.role}. Sus sesiones fueron cerradas.")
-    if args.role == Role.CONTROL_TOTAL.value and not user.totp_enabled:
-        out("Aviso: control_total exige segundo factor; enrólalo con enroll-totp antes de entrar.")
+    _open_enrollment_if_needed(user, out)
     return 0
 
 
@@ -222,6 +258,7 @@ def _cmd_set_areas(args: argparse.Namespace, **io: object) -> int:
     _audit("cambiar_areas", user.username, antes=before, despues=format_memberships(memberships))
     out(f"Áreas de '{user.username}' reemplazadas; sus sesiones fueron cerradas.")
     _report_areas(memberships, out)
+    _open_enrollment_if_needed(user, out)
     return 0
 
 
@@ -248,13 +285,18 @@ def _cmd_import_users(args: argparse.Namespace, **io: object) -> int:
                 areas=format_memberships(item.memberships),
                 preset=item.preset,
             )
+        if item.action not in ("crear", "sin cambios"):
+            # Las cuentas nuevas quedan desactivadas: su ventana se abre al habilitarlas.
+            updated = store.get_user_by_username(item.username)
+            if updated is not None:
+                _open_enrollment_if_needed(updated, out)
     out(
         f"Aplicado: {counts['creados']} creados (desactivados), "
         f"{counts['actualizados']} actualizados, {counts['sin_cambios']} sin cambios."
     )
     if counts["creados"]:
         out("Para habilitar a cada persona nueva: reset-password --username X y enable-user.")
-        out("Las cuentas control_total además exigen enroll-totp.")
+        out("Quien necesite segundo factor lo activará desde la GUI al entrar.")
     return 0
 
 
@@ -267,6 +309,10 @@ def _cmd_set_active(args: argparse.Namespace, *, active: bool, **io: object) -> 
         store.delete_user_sessions(user.id)
     _audit("activar" if active else "desactivar", user.username)
     out(f"Usuario '{user.username}' {'activado' if active else 'desactivado'}.")
+    if active:
+        _open_enrollment_if_needed(user, out)
+    else:
+        store.set_totp_enroll_window(user.id, None)
     return 0
 
 
@@ -286,13 +332,60 @@ def _cmd_list_users(_: argparse.Namespace, **io: object) -> int:
         out("(sin usuarios)")
         return 0
     store = get_store()
-    out(f"{'usuario':<36}{'rol':<16}{'activo':<8}{'totp':<6}áreas")
+    now = clock.now()
+    out(f"{'usuario':<36}{'rol':<16}{'activo':<8}{'totp':<12}áreas")
     for user in users:
-        areas = format_memberships(store.get_memberships(user.id)) or "-"
+        memberships = store.get_memberships(user.id)
+        areas = format_memberships(memberships) or "-"
+        if user.totp_enabled:
+            factor = "sí"
+        elif auth.can_self_enroll(user, now=now):
+            factor = "pendiente"
+        elif auth.requires_mfa(user, memberships):
+            factor = "FALTA"
+        else:
+            factor = "no"
         out(
             f"{user.username:<36}{user.role:<16}"
-            f"{'sí' if user.active else 'no':<8}{'sí' if user.totp_enabled else 'no':<6}{areas}"
+            f"{'sí' if user.active else 'no':<8}{factor:<12}{areas}"
         )
+    return 0
+
+
+def _cmd_allow_totp_enroll(args: argparse.Namespace, **io: object) -> int:
+    out: Out = io["out"]  # type: ignore[assignment]
+    if args.pendientes:
+        opened = sum(
+            _open_enrollment_if_needed(user, out)
+            for user in get_store().list_users()
+            if not auth.can_self_enroll(user, now=clock.now())
+        )
+        out(f"Ventanas abiertas: {opened}.")
+        return 0
+    if not args.username:
+        raise CliError("Indica --username o --pendientes.")
+    user = _find_user(args.username)
+    if user.totp_enabled:
+        raise CliError(
+            f"'{user.username}' ya tiene segundo factor. Si perdió el teléfono usa reset-totp."
+        )
+    if not user.active:
+        raise CliError(f"'{user.username}' está desactivado: actívalo primero con enable-user.")
+    _open_enrollment(user, out)
+    return 0
+
+
+def _cmd_reset_totp(args: argparse.Namespace, **io: object) -> int:
+    out: Out = io["out"]  # type: ignore[assignment]
+    user = _find_user(args.username)
+    store = get_store()
+    store.clear_totp(user.id)
+    closed = store.delete_user_sessions(user.id)
+    _audit("quitar_totp", user.username, sesiones_cerradas=closed)
+    out(f"Segundo factor de '{user.username}' eliminado; sus sesiones fueron cerradas.")
+    reset = store.get_user(user.id) or user
+    if not _open_enrollment_if_needed(reset, out):
+        out("No lo necesita con su rol y áreas actuales.")
     return 0
 
 
@@ -402,6 +495,18 @@ def _parser() -> argparse.ArgumentParser:
 
     sub.add_parser("list-users", help="lista usuarios (sin secretos)")
 
+    p = sub.add_parser(
+        "allow-totp-enroll", help="abre la ventana para activar el segundo factor desde la GUI"
+    )
+    group = p.add_mutually_exclusive_group(required=True)
+    group.add_argument("--username")
+    group.add_argument(
+        "--pendientes", action="store_true", help="a todas las personas activas que lo necesiten"
+    )
+
+    p = sub.add_parser("reset-totp", help="quita el segundo factor (teléfono perdido)")
+    p.add_argument("--username", required=True)
+
     p = sub.add_parser("revoke-sessions", help="cierra sesiones abiertas")
     p.add_argument("--username")
     p.add_argument("--all", action="store_true")
@@ -440,6 +545,8 @@ def main(
         "enable-user": lambda a, **kw: _cmd_set_active(a, active=True, **kw),
         "unlock": _cmd_unlock,
         "list-users": _cmd_list_users,
+        "allow-totp-enroll": _cmd_allow_totp_enroll,
+        "reset-totp": _cmd_reset_totp,
         "revoke-sessions": _cmd_revoke_sessions,
         "audit-log": _cmd_audit_log,
         "audit-verify": _cmd_audit_verify,

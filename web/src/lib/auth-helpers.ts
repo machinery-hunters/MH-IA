@@ -142,3 +142,99 @@ export function passwordChangeErrorMessage(failure: LoginFailure | null): string
       return "No se pudo cambiar la contraseña. Intenta de nuevo.";
   }
 }
+
+// -- Activación del segundo factor --------------------------------------------------------
+
+/** Lo que devuelve la API al iniciar sesión dentro de la ventana de activación. */
+export interface MfaEnrollment {
+  secret: string;
+  otpauthUri: string;
+  /** QR como data URI SVG generado por el servidor. */
+  qr: string;
+  /** Segundos que dura la activación antes de caducar. */
+  expiresIn: number;
+}
+
+const QR_PREFIX = "data:image/svg+xml;base64,";
+
+/**
+ * Valida la forma de `mfa_enrollment` antes de pintarla. El QR solo se acepta como
+ * SVG en base64 (nunca una URL externa) y el URI solo como `otpauth://totp/`.
+ */
+export function parseMfaEnrollment(raw: unknown): MfaEnrollment | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const body = raw as Record<string, unknown>;
+  const { secret, otpauth_uri: uri, qr, expires_in: expiresIn } = body;
+  if (typeof secret !== "string" || !/^[A-Z2-7]{16,64}$/.test(secret)) return null;
+  if (typeof uri !== "string" || !uri.startsWith("otpauth://totp/")) return null;
+  if (typeof qr !== "string" || !qr.startsWith(QR_PREFIX)) return null;
+  if (!/^[A-Za-z0-9+/=]+$/.test(qr.slice(QR_PREFIX.length))) return null;
+  if (typeof expiresIn !== "number" || !Number.isFinite(expiresIn) || expiresIn <= 0) {
+    return null;
+  }
+  return { secret, otpauthUri: uri, qr, expiresIn };
+}
+
+/** "JBSWY3DPEHPK3PXP" -> "JBSW Y3DP EHPK 3PXP", más fácil de copiar a mano. */
+export function groupSecret(secret: string): string {
+  return secret.match(/.{1,4}/g)?.join(" ") ?? secret;
+}
+
+/** Mensaje ante un fallo al confirmar la activación. `null` = no hubo respuesta (red). */
+export function enrollErrorMessage(failure: LoginFailure | null): string {
+  if (failure === null) {
+    return "No se pudo conectar con el servidor. Revisa tu conexión e intenta de nuevo.";
+  }
+  switch (failure.status) {
+    case 400:
+      return "El código no coincide. Revisa que la hora de tu teléfono sea automática y usa el código que se ve ahora.";
+    case 410:
+      return "La activación caducó. Vuelve a iniciar sesión para empezar de nuevo.";
+    case 422:
+      return "Escribe los 6 dígitos que muestra tu app autenticadora.";
+    case 429:
+      return `Demasiados intentos. Vuelve a intentarlo en ${formatWait(failure.retryAfter)}.`;
+    case 503:
+      return "El servicio de autenticación no está disponible. Intenta de nuevo en un momento.";
+    default:
+      return "No se pudo activar el segundo factor. Intenta de nuevo.";
+  }
+}
+
+// -- Mis sesiones ---------------------------------------------------------------------------
+
+/** "hace 5 minutos", a partir de segundos epoch (como los devuelve la API). */
+export function formatAgo(epochSeconds: number, nowSeconds: number): string {
+  const elapsed = Math.max(0, nowSeconds - epochSeconds);
+  if (elapsed < 60) return "hace un momento";
+  const minutes = Math.floor(elapsed / 60);
+  if (minutes < 60) return minutes === 1 ? "hace 1 minuto" : `hace ${minutes} minutos`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours === 1 ? "hace 1 hora" : `hace ${hours} horas`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? "hace 1 día" : `hace ${days} días`;
+}
+
+export interface SessionLike {
+  current: boolean;
+  last_seen: number;
+}
+
+/** Esta sesión primero; las demás de la más a la menos reciente. */
+export function sortSessions<T extends SessionLike>(sessions: readonly T[]): T[] {
+  return [...sessions].sort(
+    (a, b) => Number(b.current) - Number(a.current) || b.last_seen - a.last_seen,
+  );
+}
+
+/** Mensaje ante un fallo al listar o cerrar sesiones. */
+export function sessionsErrorMessage(failure: LoginFailure | null): string {
+  if (failure === null) {
+    return "No se pudo conectar con el servidor. Revisa tu conexión e intenta de nuevo.";
+  }
+  if (failure.status === 404) return "Esa sesión ya no existe. La lista se actualizó.";
+  if (failure.status === 503) {
+    return "El servicio de autenticación no está disponible. Intenta de nuevo en un momento.";
+  }
+  return "No se pudo completar la operación. Intenta de nuevo.";
+}

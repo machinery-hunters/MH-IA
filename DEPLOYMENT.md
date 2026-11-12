@@ -163,7 +163,37 @@ docker compose run --rm mhia-api python -m pipeline_ai.security.manage audit-log
 Otros comandos: `reset-password`, `set-role`, `disable-user`, `enable-user`,
 `unlock`, `revoke-sessions`. Cada persona puede cambiar su propia contraseña
 desde la GUI (**Mi cuenta**, al hacer clic en su nombre); eso cierra sus
-sesiones en otros equipos. `reset-password` queda para cuando la olvidó.
+sesiones en otros equipos. `reset-password` queda para cuando la olvidó. En
+**Mi cuenta** también ve sus sesiones abiertas y puede cerrar las que no
+reconozca.
+
+#### Segundo factor para quien ve datos confidenciales
+
+Además de `control_total`, necesita segundo factor (TOTP) quien tenga un área en
+`MFA_REQUIRED_LEVEL` o más (CONFIDENTIAL por omisión; `RESTRICTED` lo limita a
+RH, `INTERNAL` lo pide a todos). Esas personas lo activan **solas desde la GUI**:
+al entrar con su contraseña ven un código QR, lo escanean con Google o Microsoft
+Authenticator y escriben el primer código. Solo pueden hacerlo dentro de una
+**ventana de 72 horas** (`TOTP_ENROLL_WINDOW_S`) que abre la CLI; fuera de ella,
+el login les pide contactar al administrador. La CLI abre la ventana sola al
+crear a alguien, restablecer su contraseña, reactivarlo o cambiarle rol o áreas
+si con eso necesita segundo factor y no lo tiene.
+
+```bash
+# Abrir la ventana a una persona, o a todas las que lo necesitan y no lo tienen
+docker compose run --rm mhia-api python -m pipeline_ai.security.manage allow-totp-enroll --username <correo>
+docker compose run --rm mhia-api python -m pipeline_ai.security.manage allow-totp-enroll --pendientes
+# Perdió el teléfono: quita el factor, cierra sus sesiones y reabre la ventana
+docker compose run --rm mhia-api python -m pipeline_ai.security.manage reset-totp --username <correo>
+```
+
+`list-users` muestra en la columna `totp`: `sí`, `pendiente` (ventana abierta),
+`FALTA` (lo necesita y no puede entrar hasta que le abras la ventana) o `no`.
+
+**Al actualizar a la versión con este cambio** (esquema 4 de la base) se cierran
+todas las sesiones y quien vea CONFIDENTIAL sin segundo factor queda sin poder
+entrar. Justo después del despliegue corre `allow-totp-enroll --pendientes` y
+avisa a esas personas que al entrar verán el QR.
 
 #### Registro de auditoría
 

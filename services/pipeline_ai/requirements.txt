@@ -28,6 +28,10 @@ cryptography>=43.0.0
 # Importación de usuarios desde Excel (security.user_import)
 openpyxl>=3.1.5
 
+# QR del segundo factor en la activación desde la GUI (api.auth_routes). Python puro, sin
+# dependencias.
+segno>=1.6
+
 # Base de usuarios, áreas y registro en Postgres (security.auth_store). El extra "binary"
 # trae libpq dentro de la rueda (amd64 y arm64): la imagen no necesita paquetes del sistema.
 psycopg[binary]>=3.2

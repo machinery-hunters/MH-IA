@@ -51,11 +51,16 @@ def test_every_cli_change_is_recorded_with_who_and_before_after(auth_env, make_u
     store = auth_env.store
     assert _actions(store) == [
         ("crear_usuario", "beto"),
+        # Ve CONFIDENTIAL: cada cambio que lo deja sin segundo factor abre su activación.
+        ("abrir_activacion_totp", "beto"),
         ("cambiar_contrasena", "beto"),
+        ("abrir_activacion_totp", "beto"),
         ("cambiar_rol", "ana"),
         ("cambiar_areas", "ana"),
+        ("abrir_activacion_totp", "ana"),
         ("desactivar", "ana"),
         ("activar", "ana"),
+        ("abrir_activacion_totp", "ana"),
         ("desbloquear", "ana"),
         ("cerrar_sesiones", "*"),
     ]
@@ -213,7 +218,7 @@ def _legacy_sqlite(path):
 
     legacy = SqliteAuthStore(path)
     user = legacy.create_user("ana", passwords.hash_password(PASSWORD), "lider", now=clock.now())
-    legacy.set_memberships(user.id, {Area.TALLER: C})
+    legacy.set_memberships(user.id, {Area.GENERAL: Sensitivity.INTERNAL})
     legacy.record_admin_event("cli:viejo", "crear_usuario", "ana")
     legacy.create_session("h" * 64, user.id, mfa=False, now=clock.now(), absolute_s=100)
     return user
@@ -231,7 +236,7 @@ def test_postgres_imports_the_old_sqlite_once_and_archives_it(auth_env, tmp_path
     store = get_store()
 
     assert store.backend == "postgres"
-    assert store.get_memberships(user.id) == {Area.TALLER: C}
+    assert store.get_memberships(user.id) == {Area.GENERAL: Sensitivity.INTERNAL}
     assert auth.authenticate("ana", PASSWORD).status == "ok"  # misma contraseña
     assert db_count(store, "sessions") == 1  # solo la del login de arriba
     actions = [e.action for e in reversed(store.list_admin_events())]
