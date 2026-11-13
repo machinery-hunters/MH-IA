@@ -5,6 +5,9 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  # Cada lunes: los avisos nuevos aparecen aunque nadie haya subido cambios.
+  schedule:
+    - cron: "0 14 * * 1"
 
 permissions:
   contents: read
@@ -138,3 +141,89 @@ jobs:
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deps-audit:
+    name: Dependencias (pip-audit + npm audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # pip-audit fijado con hash, como el resto de las dependencias.
+      - name: Instalar pip-audit
+        run: pip install --require-hashes -r .github/herramientas/pip-audit.lock
+
+      # Cualquier aviso con versión corregida en las dependencias de la API rompe el CI.
+      - name: pip-audit (API y pruebas)
+        working-directory: services/pipeline_ai
+        run: |
+          pip-audit -r requirements.lock --require-hashes --disable-pip --progress-spinner off
+          pip-audit -r requirements-dev.lock --require-hashes --disable-pip --progress-spinner off
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Lo que se despliega (dependencies) no admite ni avisos moderados; las
+      # herramientas de desarrollo (lint, pruebas) rompen el CI desde "high".
+      - name: npm audit (GUI)
+        working-directory: web
+        run: |
+          npm audit --omit=dev --audit-level=moderate
+          npm audit --audit-level=high
+
+  images-scan:
+    name: Imágenes (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build API (amd64, para escanear)
+        uses: docker/build-push-action@v6
+        with:
+          context: services/pipeline_ai
+          load: true
+          tags: mhia-api:ci
+          cache-from: type=gha,scope=escaneo-api
+          cache-to: type=gha,mode=max,scope=escaneo-api
+
+      - name: Build GUI (amd64, para escanear)
+        uses: docker/build-push-action@v6
+        with:
+          context: web
+          load: true
+          tags: mhia-web:ci
+          build-args: API_INTERNAL_URL=http://mhia-api:8000
+          cache-from: type=gha,scope=escaneo-web
+          cache-to: type=gha,mode=max,scope=escaneo-web
+
+      # La base de avisos de Trivy se descarga una vez al día.
+      - name: Fecha para la caché de Trivy
+        id: fecha
+        run: echo "hoy=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ steps.fecha.outputs.hoy }}
+          restore-keys: trivy-db-
+
+      # Rompe el CI con cualquier aviso HIGH o CRITICAL que ya tenga corrección
+      # (paquetes del sistema y de Python/Node dentro de la imagen). Un aviso
+      # aceptado va en .trivyignore con su motivo y fecha de revisión (SECURITY.md).
+      - name: Trivy
+        run: |
+          for img in mhia-api:ci mhia-web:ci; do
+            echo "::group::$img"
+            docker run --rm \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "$HOME/.cache/trivy:/root/.cache/trivy" \
+              -v "$PWD:/repo:ro" \
+              mirror.gcr.io/aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c \
+              image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+              --ignorefile /repo/.trivyignore --exit-code 1 --no-progress "$img"
+            echo "::endgroup::"
+          done

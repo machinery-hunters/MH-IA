@@ -22,8 +22,13 @@ ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 
-# Usuario sin privilegios: el contenedor nunca corre como root.
-RUN addgroup -S -g 10001 mhia && adduser -S -u 10001 -G mhia mhia
+# Usuario sin privilegios: el contenedor nunca corre como root. En ejecución solo
+# hace falta node: se quitan npm, npx, corepack y yarn, que traen dependencias con
+# avisos (Trivy en CI) y no se usan para servir la GUI.
+RUN addgroup -S -g 10001 mhia && adduser -S -u 10001 -G mhia mhia \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+              /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+              /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-*
 
 COPY --from=build --chown=mhia:mhia /app/.next/standalone ./
 COPY --from=build --chown=mhia:mhia /app/.next/static ./.next/static

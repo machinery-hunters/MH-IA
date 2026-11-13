@@ -81,6 +81,42 @@ def test_ci_tools_are_pinned():
     assert re.search(r"zricethezav/gitleaks:v[\d.]+@sha256:[0-9a-f]{64}", ci)
 
 
+def test_ci_scans_dependencies_and_images():
+    """Bloque 6: pip-audit, npm audit y Trivy rompen el CI con avisos corregibles."""
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    workflow = yaml.safe_load(ci)
+    assert {"deps-audit", "images-scan"} <= set(workflow["jobs"])
+    # pip-audit fijado con hash y sobre los dos lockfiles.
+    assert "--require-hashes -r .github/herramientas/pip-audit.lock" in ci
+    assert (
+        (ROOT / ".github/herramientas/pip-audit.lock")
+        .read_text(encoding="utf-8")
+        .count("--hash=sha256:")
+    )
+    for lock in ("requirements.lock", "requirements-dev.lock"):
+        assert f"pip-audit -r {lock} --require-hashes" in ci
+    assert "npm audit --omit=dev --audit-level=moderate" in ci
+    assert "npm audit --audit-level=high" in ci
+    # Trivy fijado por digest, sobre ambas imágenes, y falla de verdad.
+    assert re.search(r"aquasec/trivy:[\d.]+@sha256:[0-9a-f]{64}", ci)
+    assert "--exit-code 1" in ci and "--severity HIGH,CRITICAL" in ci
+    assert "mhia-api:ci mhia-web:ci" in ci
+    assert (ROOT / ".trivyignore").exists()
+    # Corre también cada semana aunque nadie suba cambios (PyYAML lee la clave "on" como True).
+    triggers = workflow.get("on", workflow.get(True))
+    assert triggers["schedule"]
+
+
+def test_images_get_security_patches_and_drop_unused_tools():
+    api = (PIPELINE / "Dockerfile").read_text(encoding="utf-8")
+    # Un apt-get update fallido debe romper el build, no dejar paquetes sin parchar.
+    assert "apt-get update --error-on=any" in api and "apt-get upgrade -y" in api
+    web = (ROOT / "web/Dockerfile").read_text(encoding="utf-8")
+    run_stage = web.split(" AS run")[1]
+    assert "rm -rf /usr/local/lib/node_modules/npm" in run_stage
+    assert "/usr/local/bin/npx" in run_stage
+
+
 def test_dependabot_watches_images_actions_and_npm():
     config = yaml.safe_load((ROOT / ".github/dependabot.yml").read_text(encoding="utf-8"))
     ecosystems = {u["package-ecosystem"] for u in config["updates"]}
